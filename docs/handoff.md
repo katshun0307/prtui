@@ -10,28 +10,41 @@
 
 - 対象 repo: 起動ディレクトリ (既定は cwd, `-C <dir>` で上書き) の repo. `gh repo view` で `owner/name` を取る
 - 対象 PR: open PR のうち author:@me または assignee:@me. GraphQL の `search` を 2 つ alias して 1 リクエストで取り, 番号で重複除去し, 更新日時の降順に並べる
-- stacked PR: `baseRefName` が一覧内の別 PR の `headRefName` になっていれば親子とみなし, 親の直後に子を並べてまとめる (`github::group_stacks`). stack 同士は stack 内で最も新しい更新日時の降順. 親が一覧に無い PR (他人の PR の上に積んだものなど) は根として扱うので stack にならない. 枝分かれした stack は深さ優先で並べ, 段数は最も深い枝に合わせる
+- stacked PR: `baseRefName` が一覧内の別 PR の `headRefName` になっていれば親子とみなし, 親の直後に子を並べてまとめる (`domain/stack.rs` の `group_stacks`). stack 同士は stack 内で最も新しい更新日時の降順. 親が一覧に無い PR (他人の PR の上に積んだものなど) は根として扱うので stack にならない. 枝分かれした stack は深さ優先で並べ, 段数は最も深い枝に合わせる
 - チェックアウト先: メイン checkout. worktree 内から起動しても `git rev-parse --git-common-dir` の親を対象にする. PR ごとの worktree は作らない (ユーザーの選択)
 - チェックアウト: `gh pr checkout <n>`. 未コミットの変更 (untracked は除く) があれば実行しない
 - main の取り込み: `u` キー. stacked PR では update-branch API が base (親のブランチ) を取り込むので, 確認プロンプトとメッセージに base 名を出す. base が main 以外のときは取り込み済みかを判定できないので常に確認を出す. GitHub の update-branch API (`PUT repos/{repo}/pulls/{n}/update-branch`) で remote ブランチに merge commit を作る. ローカルは触らない. `expected_head_sha` に取得時の head oid を渡し, その後に head が動いていれば GitHub が 422 で拒否する. コンフリクトしている PR (`mergeable == CONFLICTING`) では無効にする (ユーザーの指定). 実行前に y/N で確認する
 - PR の状態変更: `O` で open (Draft を外す, `gh pr ready`), `D` を 2 回で draft に戻す (`gh pr ready --undo`), `X` を 2 回で close (`gh pr close`). open は 1 キー, draft と close は 2 キーにする (ユーザーの指定). 1 回目でフッターに確認を出し, 同じキー以外を押すと取りやめる. 既に Draft の PR への draft と, Draft でない PR への open は何もしない. 実行はスレッドで行い, 終わったら再取得する
-- review 依頼: `R` を 2 回で git config `prtui.reviewers` の相手に review を依頼する (`gh pr edit <n> --add-reviewer`). 相手は repo ごとに違うので git config で指定する (ユーザーの指定. 最初は alice と bobBuilder の固定だった). 値はカンマか空白で区切るか, `git config --add` で 1 人ずつ足す (`LocalState::read` が `--get-all` で読む). 未設定なら設定を促すエラーを出す. open (Draft でない) PR に限り, Draft では `#<n> は Draft なので review 依頼しない` を出す. 既に依頼中の人と PR author 自身は除き, レビュー済みの人には再依頼する. 全員が依頼中なら何もしない. 反映待ちは全員が依頼中になるまで. login は大文字小文字を区別せずに比べる (API は `bobBuilder` を返すので, 完全一致だと反映待ちが終わらず 20 秒経つまで一覧が変わらなかった)
-- Linear を開く: `l` キー. PR の `headRefName` (大文字小文字を無視, 大文字に正規化), 次に `title` から issue キー (`[A-Z][A-Z0-9]*-[0-9]+`) を探し, `https://linear.app/<workspace>/issue/<KEY>` を macOS の `open` で開く. workspace は repo ごとに違うので git config `prtui.linear-workspace` (`LocalState::read` で読む) から取り, 未設定なら設定を促すエラーを出す. キーが無ければ `#<n> に Linear の issue キーが無い` を出す
+- review 依頼: `R` を 2 回で git config `prtui.reviewers` の相手に review を依頼する (`gh pr edit <n> --add-reviewer`). 相手は repo ごとに違うので git config で指定する (ユーザーの指定. 最初は alice と bobBuilder の固定だった). 値はカンマか空白で区切るか, `git config --add` で 1 人ずつ足す (`infra/git.rs` の `read_local_state` が `--get-all` で読む). 未設定なら設定を促すエラーを出す. open (Draft でない) PR に限り, Draft では `#<n> は Draft なので review 依頼しない` を出す. 既に依頼中の人と PR author 自身は除き, レビュー済みの人には再依頼する. 全員が依頼中なら何もしない. 反映待ちは全員が依頼中になるまで. login は大文字小文字を区別せずに比べる (API は `bobBuilder` を返すので, 完全一致だと反映待ちが終わらず 20 秒経つまで一覧が変わらなかった)
+- Linear を開く: `l` キー. PR の `headRefName` (大文字小文字を無視, 大文字に正規化), 次に `title` から issue キー (`[A-Z][A-Z0-9]*-[0-9]+`) を探し, `https://linear.app/<workspace>/issue/<KEY>` を macOS の `open` で開く. workspace は repo ごとに違うので git config `prtui.linear-workspace` (`infra/git.rs` の `read_local_state` で読む) から取り, 未設定なら設定を促すエラーを出す. キーが無ければ `#<n> に Linear の issue キーが無い` を出す
 - Linear review を開く: `L` キー. review の URL (`https://linear.app/<workspace>/review/<タイトル>-<slugId>`) の slugId は Linear 側の ID で, GitHub の情報からは組み立てられない. Linear の公開 GraphQL API にも GitHub の PR 番号から引くクエリが無い (`diff(id:)` は internal で Linear の ID が要る). そこで Linear の bot (linear-code) が PR に付けるコメントから取る. `gh api --paginate repos/{repo}/issues/{n}/comments` を UI とは別スレッドで呼び, `<!-- linear-review-link -->` の直後の `href` を `?openGuide=true` などの query を外して `open` する. 同じコメントには issue 本文の引用があり, そこに関連する別 PR の review URL が並ぶので, 目印より前は見ない. bot のコメントが無い PR (例: issue に紐付いていない PR) では `#<n> に Linear review のリンクが無い` を出す
 - キャッシュ: 全件取得に成功するたびに一覧を `$XDG_CACHE_HOME/prtui/<owner>__<name>.json` (未設定なら `~/.cache`) に書く. 起動時はこれを読んで即表示し, 裏で取り直す. ヘッダに `取得 Xm 前` を出し, 取り直しが終わるまで `(キャッシュ)` を付ける. `Pr` の形が変わって読めないキャッシュは捨てる. `--dump` はキャッシュを使わない
-- 操作後の更新: `u`, `O`, `DD`, `XX`, `RR` の後は全件を取り直さず, その PR だけを `fetch_pr` (`repository.pullRequest` に同じ fragment) で取り直して差し替える. 反映を待つため 2 秒おきに最大 10 回取り直す. 止める条件は, `u` なら head oid が変わる, open / draft なら `isDraft` が変わる, close なら open でなくなる (一覧から消す). 待っている間は一覧のタイトルに `#n を同期中…` を出す. 差し替え後は `arrange` で並びと stack をまとめ直し, 選択中の PR は番号で追う
+- 操作後の更新: `u`, `O`, `DD`, `XX`, `RR` の後は全件を取り直さず, その PR だけを `fetch_pr` (`repository.pullRequest` に同じ fragment) で取り直して差し替える. 止める条件は `WatchUntil` (`app/event.rs`) のデータで表す. 反映を待つため 2 秒おきに最大 10 回取り直す. 止める条件は, `u` なら head oid が変わる, open / draft なら `isDraft` が変わる, close なら open でなくなる (一覧から消す). 待っている間は一覧のタイトルに `#n を同期中…` を出す. 差し替え後は `arrange` で並びと stack をまとめ直し, 選択中の PR は番号で追う
 - 実装: Rust (edition 2024), ratatui 0.30 (crossterm は `ratatui::crossterm` の re-export を使う), serde, anyhow, chrono. GitHub と git は `gh` と `git` コマンドを `std::process::Command` で呼ぶ. 非同期 runtime は使わず, 時間のかかる処理はスレッド + mpsc で UI をブロックしない
 
 ## 構成
 
+層は domain → infra → app → ui / dump → main の順に積み, 下に向かってのみ依存する. 依存規則と新機能を足すときに触るファイルは `CLAUDE.md` の「構造」節にある.
+
 | ファイル | 役割 |
 |---|---|
 | `src/main.rs` | 引数処理 (`-C`, `--dump`), 端末初期化, イベントループ, 外部コマンド実行時の TUI 一時停止 |
-| `src/github.rs` | GraphQL クエリと `Pr` への変換, 全件取得 `fetch_prs` と 1 件取得 `fetch_pr`, `update_branch` |
-| `src/cache.rs` | PR 一覧のディスクキャッシュの読み書き |
-| `src/git.rs` | コマンド実行ヘルパ `run`, メイン worktree の解決, `LocalState` (現在ブランチ, dirty, refs/heads の oid) |
-| `src/app.rs` | 状態とキー操作 |
-| `src/ui.rs` | 描画 |
+| `src/dump.rs` | `--dump` のテキスト出力 |
+| `src/domain/` | 純粋な型と関数. `pr.rs` (`Pr`), `stack.rs` (`arrange`, `group_stacks`), `review.rs` (`review_targets`), `linear.rs` (issue キーと review URL の抽出), `local.rs` (`LocalState`, `parse_reviewers`), `op.rs` (`PrOp`) |
+| `src/infra/process.rs` | コマンド実行ヘルパ `run`, `open_url` |
+| `src/infra/git.rs` | メイン worktree の解決 `main_worktree`, `read_local_state` (現在ブランチ, dirty, refs/heads の oid, git config) |
+| `src/infra/gh.rs` | gh コマンド. 全件取得 `fetch_prs` と 1 件取得 `fetch_pr`, `update_branch`, `checkout`, `change_state`, `view_web`, `linear_review_url` |
+| `src/infra/graphql.rs` | GraphQL クエリ, `Raw*` 型と `Pr` への変換, JSON の解析 `parse_search` / `parse_one` |
+| `src/infra/cache.rs` | PR 一覧のディスクキャッシュの読み書き |
+| `src/app/state.rs` | 全状態 `AppState` |
+| `src/app/event.rs` | `Event` (スレッドの結果), `Effect` (副作用の要求), `Action` (main への指示), `WatchUntil` |
+| `src/app/update.rs` | キー操作とイベント処理. `AppState` を更新して `Vec<Effect>` を返す純粋関数 |
+| `src/app/runtime.rs` | `App`. Effect を実行し, スレッドの起動と infra の呼び出しをここに閉じる |
+| `src/ui/` | 描画. `mod.rs` (ヘッダ, フッタ, 配色), `table.rs` (一覧), `detail.rs` (詳細欄), `format.rs` |
+
+### レイヤー化した理由
+
+refactor 前は 1 つの `App` に状態, キー判断, スレッド起動, gh 呼び出しが混ざっていて, キー操作の振る舞いを gh を呼ばずに確かめる手段が無かった. そこで判断 (update) と実行 (runtime) を分け, update は「何をするか」を `Effect` のデータとして返すだけにした. gh / git の差し替え境界は trait ではなくこの `Effect` にした. キー操作とイベント処理のテストは `AppState` と返った `Vec<Effect>` の assert で書け, gh の実装が 1 つしか無いうちに trait を作る必要が無いため. runtime は薄く保って `--dump` と tmux で手動確認する. runtime もテストしたくなったら, その時点で `infra/gh.rs` の関数群を trait にする. watch の終了条件はクロージャだと `Effect` が `Debug` / `PartialEq` を持てず assert できないので, `WatchUntil` の enum にした. `AppState` は ratatui の `TableState` を持つ (選択位置とスクロール offset を毎フレーム作り直すと振る舞いが変わるため). `KeyEvent` もそのまま受け, 独自の入力型は作らない. 新旧で `--dump` の出力と TUI の画面が一致することを確かめてから merge した.
 
 ## 一覧の列
 
@@ -63,6 +76,7 @@
 
 - 2026-10-29: `RR` (review 依頼) を追加. clippy 0 件, fmt 通過, `cargo test` 通過
 - 2026-10-29: `RR` 後に Reviewer 列が変わらない不具合を直した. 原因は login の大文字小文字. 依頼相手を git config `prtui.reviewers` に移した
+- 2026-10-29: レイヤー構成に refactor した. clippy 0 件, fmt 通過, `cargo test` 43 件通過. `--dump` の出力と tmux の画面が refactor 前と一致することを確認
 
 ## 未確認
 
