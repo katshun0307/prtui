@@ -9,11 +9,16 @@ use chrono::{DateTime, Utc};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::TableState;
 
-use crate::cache::{self, Cache};
-use crate::git::{LocalState, run};
-use crate::github::{
-    Pr, ReviewerState, arrange, fetch_pr, fetch_prs, linear_review_url, update_branch,
-};
+use crate::domain::linear::linear_issue_key;
+use crate::domain::local::LocalState;
+use crate::domain::op::PrOp;
+use crate::domain::pr::Pr;
+use crate::domain::review::review_targets;
+use crate::domain::stack::arrange;
+use crate::infra::cache::{self, Cache};
+use crate::infra::gh::{self, fetch_pr, fetch_prs, linear_review_url, update_branch};
+use crate::infra::git::read_local_state;
+use crate::infra::process::open_url;
 
 pub const AUTO_REFRESH: Duration = Duration::from_secs(300);
 /// 操作の反映を待って PR を取り直す間隔と回数. update-branch は GitHub 側で非同期に merge される
@@ -30,55 +35,6 @@ pub enum Event {
     ChangedState(u64, PrOp, Result<String>),
     /// 1 件だけ取り直した結果. open でなくなっていれば None
     Reloaded(u64, Box<Result<Option<Pr>>>),
-}
-
-/// PR の状態を変える操作. `gh pr ready`, `gh pr close`, `gh pr edit` で行う
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PrOp {
-    /// Draft を外してレビュー可能にする
-    Open,
-    Draft,
-    Close,
-    /// git config `prtui.reviewers` の相手に review を依頼する. Draft でない PR に限る
-    Review,
-}
-
-impl PrOp {
-    /// 実行するキー. Draft, Close, Review は同じキーをもう一度押して確定する
-    pub fn key(self) -> char {
-        match self {
-            PrOp::Open => 'O',
-            PrOp::Draft => 'D',
-            PrOp::Close => 'X',
-            PrOp::Review => 'R',
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            PrOp::Open => "open",
-            PrOp::Draft => "draft",
-            PrOp::Close => "close",
-            PrOp::Review => "review 依頼",
-        }
-    }
-
-    /// `#n を {phrase}する` の形でメッセージに埋める. reviewers は review 依頼の相手
-    pub fn phrase(self, reviewers: &[String]) -> String {
-        match self {
-            PrOp::Review => format!("{} に review 依頼", reviewers.join(", ")),
-            _ => format!("{} に", self.label()),
-        }
-    }
-
-    fn gh_args(self, n: &str) -> Vec<&str> {
-        match self {
-            PrOp::Open => vec!["pr", "ready", n],
-            PrOp::Draft => vec!["pr", "ready", n, "--undo"],
-            PrOp::Close => vec!["pr", "close", n],
-            PrOp::Review => vec!["pr", "edit", n, "--add-reviewer"],
-        }
-    }
 }
 
 pub enum Action {
@@ -123,7 +79,7 @@ impl App {
         let (tx, rx) = channel();
         let cached = cache::load(&repo);
         let mut app = Self {
-            local: LocalState::read(&dir).unwrap_or_default(),
+            local: read_local_state(&dir).unwrap_or_default(),
             dir,
             repo,
             fetched_at: cached.as_ref().map(|c| c.fetched_at),
@@ -210,7 +166,7 @@ impl App {
     }
 
     fn reload_local(&mut self) {
-        match LocalState::read(&self.dir) {
+        match read_local_state(&self.dir) {
             Ok(l) => self.local = l,
             Err(e) => self.error(e.to_string()),
         }
@@ -264,7 +220,7 @@ impl App {
                 self.busy = None;
                 match res {
                     Ok(Some(url)) => {
-                        if let Err(e) = run(&self.dir, "open", &[&url]) {
+                        if let Err(e) = open_url(&self.dir, &url) {
                             self.error(e.to_string());
                         }
                     }
@@ -348,11 +304,10 @@ impl App {
             }
             KeyCode::Enter | KeyCode::Char('c') => self.checkout(),
             KeyCode::Char('o') => {
-                if let Some(n) = self.selected().map(|p| p.number) {
-                    let n = n.to_string();
-                    if let Err(e) = run(&self.dir, "gh", &["pr", "view", &n, "--web"]) {
-                        self.error(e.to_string());
-                    }
+                if let Some(n) = self.selected().map(|p| p.number)
+                    && let Err(e) = gh::view_web(&self.dir, n)
+                {
+                    self.error(e.to_string());
                 }
             }
             KeyCode::Char('l') => self.open_linear(),
@@ -392,7 +347,7 @@ impl App {
             return;
         };
         let url = format!("https://linear.app/{workspace}/issue/{key}");
-        if let Err(e) = run(&self.dir, "open", &[&url]) {
+        if let Err(e) = open_url(&self.dir, &url) {
             self.error(e.to_string());
         }
     }
@@ -422,7 +377,7 @@ impl App {
         }
         let Some(pr) = self.selected() else { return };
         let (n, base) = (pr.number, pr.base_ref_name.clone());
-        if pr.mergeable == "CONFLICTING" {
+        if pr.is_conflicting() {
             self.error(format!(
                 "#{n} はコンフリクトしているので {base} を取り込めない"
             ));
@@ -478,19 +433,16 @@ impl App {
             .pr(n)
             .map(|p| review_targets(p, &self.local.reviewers))
             .unwrap_or_default()
-            .join(",");
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>();
         self.busy = Some(format!(
             "#{n} を {}している…",
             op.phrase(&self.local.reviewers)
         ));
         let (tx, dir) = (self.tx.clone(), self.dir.clone());
         thread::spawn(move || {
-            let n_str = n.to_string();
-            let mut args = op.gh_args(&n_str);
-            if op == PrOp::Review {
-                args.push(&targets);
-            }
-            let res = run(&dir, "gh", &args);
+            let res = gh::change_state(&dir, n, op, &targets);
             let _ = tx.send(Event::ChangedState(n, op, res));
         });
     }
@@ -512,7 +464,7 @@ impl App {
         self.busy = Some(format!("#{n} をチェックアウト中…"));
         let (tx, dir) = (self.tx.clone(), self.dir.clone());
         thread::spawn(move || {
-            let res = run(&dir, "gh", &["pr", "checkout", &n.to_string()]);
+            let res = gh::checkout(&dir, n);
             let _ = tx.send(Event::CheckedOut(n, res));
         });
     }
@@ -545,159 +497,5 @@ impl App {
             text,
             is_error: true,
         });
-    }
-}
-
-/// reviewers のうち, まだ依頼中でない人. author 自身には依頼できないので除く.
-/// レビュー済みの人には再依頼する. GitHub の login は大文字小文字を区別しないので,
-/// API が返す `bobBuilder` と git config の書き方が違っても同じ人とみなす
-fn review_targets<'a>(pr: &Pr, reviewers: &'a [String]) -> Vec<&'a str> {
-    reviewers
-        .iter()
-        .map(String::as_str)
-        .filter(|r| !pr.author.eq_ignore_ascii_case(r))
-        .filter(|r| {
-            !pr.reviewers
-                .iter()
-                .any(|x| x.name.eq_ignore_ascii_case(r) && x.state == ReviewerState::Requested)
-        })
-        .collect()
-}
-
-/// ブランチ名, 次にタイトルの順で Linear の issue キー (`[A-Z][A-Z0-9]*-[0-9]+`) を探す.
-/// ブランチ名は `devin/abc-412-...` のように小文字のことがあるので大文字小文字を無視し, 大文字に正規化して返す.
-fn linear_issue_key(branch: &str, title: &str) -> Option<String> {
-    find_issue_key(branch, true).or_else(|| find_issue_key(title, false))
-}
-
-/// `[A-Z][A-Z0-9]*-[0-9]+` に最初に一致する部分を大文字で返す. regex crate を足さずに手書きで探す.
-fn find_issue_key(s: &str, ignore_case: bool) -> Option<String> {
-    let b = s.as_bytes();
-    let is_alpha = |c: u8| {
-        if ignore_case {
-            c.is_ascii_alphabetic()
-        } else {
-            c.is_ascii_uppercase()
-        }
-    };
-    for start in 0..b.len() {
-        if !is_alpha(b[start]) {
-            continue;
-        }
-        let mut i = start + 1;
-        while i < b.len() && (is_alpha(b[i]) || b[i].is_ascii_digit()) {
-            i += 1;
-        }
-        if i >= b.len() || b[i] != b'-' {
-            continue;
-        }
-        let digits = i + 1;
-        let mut end = digits;
-        while end < b.len() && b[end].is_ascii_digit() {
-            end += 1;
-        }
-        if end == digits {
-            continue;
-        }
-        // 一致部分は ASCII だけなので文字境界を跨がない
-        return Some(s[start..end].to_ascii_uppercase());
-    }
-    None
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{linear_issue_key, review_targets};
-    use crate::github::tests::pr;
-    use crate::github::{Reviewer, ReviewerState};
-
-    fn configured() -> Vec<String> {
-        vec!["alice".into(), "bobBuilder".into()]
-    }
-
-    fn reviewer(name: &str, state: ReviewerState) -> Reviewer {
-        Reviewer {
-            name: name.into(),
-            state,
-        }
-    }
-
-    #[test]
-    fn review_targets_ignores_login_case() {
-        let mut p = pr(1, "a", "main");
-        p.reviewers = vec![
-            reviewer("ALICE", ReviewerState::Requested),
-            reviewer("bobbuilder", ReviewerState::Requested),
-        ];
-        assert!(review_targets(&p, &configured()).is_empty());
-    }
-
-    #[test]
-    fn review_targets_rerequests_reviewed() {
-        let mut p = pr(1, "a", "main");
-        p.reviewers = vec![
-            reviewer("alice", ReviewerState::Approved),
-            reviewer("bobBuilder", ReviewerState::Requested),
-        ];
-        assert_eq!(review_targets(&p, &configured()), vec!["alice"]);
-    }
-
-    #[test]
-    fn review_targets_skips_author() {
-        let mut p = pr(1, "a", "main");
-        p.author = "BobBuilder".into();
-        assert_eq!(review_targets(&p, &configured()), vec!["alice"]);
-        p.author = "someone".into();
-        assert_eq!(
-            review_targets(&p, &configured()),
-            vec!["alice", "bobBuilder"]
-        );
-    }
-
-    #[test]
-    fn lowercase_branch_is_normalized() {
-        assert_eq!(
-            linear_issue_key("devin/abc-412-add-login-form", "タイトル").as_deref(),
-            Some("ABC-412")
-        );
-    }
-
-    #[test]
-    fn title_leading_key_when_branch_has_none() {
-        assert_eq!(
-            linear_issue_key("feature/foo", "MNT-55 スマレジ API の 429 を リトライする")
-                .as_deref(),
-            Some("MNT-55")
-        );
-        assert_eq!(
-            linear_issue_key("feature/foo", "ABC-388 add_users").as_deref(),
-            Some("ABC-388")
-        );
-    }
-
-    #[test]
-    fn title_key_in_the_middle() {
-        assert_eq!(
-            linear_issue_key("feature/foo", "[migration] ABC-389 テーブルを足す").as_deref(),
-            Some("ABC-389")
-        );
-    }
-
-    #[test]
-    fn none_when_neither_has_key() {
-        assert_eq!(linear_issue_key("feature/foo", "キー無しのタイトル"), None);
-    }
-
-    #[test]
-    fn branch_takes_precedence() {
-        assert_eq!(
-            linear_issue_key("abc-1-fix", "MNT-2 別の issue").as_deref(),
-            Some("ABC-1")
-        );
-    }
-
-    #[test]
-    fn title_is_case_sensitive() {
-        assert_eq!(linear_issue_key("feature/foo", "abc-1 は小文字"), None);
     }
 }

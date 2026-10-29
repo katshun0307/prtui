@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::github::Pr;
+use crate::domain::pr::Pr;
 
 /// 前回取得した PR 一覧. 起動直後にこれを出し, 裏で取り直す
 #[derive(Serialize, Deserialize)]

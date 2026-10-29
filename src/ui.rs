@@ -6,8 +6,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
 
 use crate::app::App;
-use crate::git::LocalState;
-use crate::github::{CheckState, Pr, ReviewerState};
+use crate::domain::local::LocalState;
+use crate::domain::pr::{CheckState, Pr, ReviewerState};
 
 /// 配色の意味
 /// - green: 問題なし (Ready, CI 成功, APPROVED, 承認した reviewer)
@@ -162,7 +162,7 @@ fn title_cell(p: &Pr) -> Cell<'static> {
 }
 
 fn state_cell(p: &Pr) -> Cell<'static> {
-    if p.mergeable == "CONFLICTING" {
+    if p.is_conflicting() {
         Cell::from("Conflict").red().bold()
     } else if p.is_draft {
         Cell::from("Draft").fg(DIM)

@@ -1,7 +1,6 @@
 mod app;
-mod cache;
-mod git;
-mod github;
+mod domain;
+mod infra;
 mod ui;
 
 use std::path::PathBuf;
@@ -13,8 +12,8 @@ use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event as TermEvent, KeyEventKind};
 
 use app::{AUTO_REFRESH, Action, App};
-use git::LocalState;
-use github::CheckState;
+use domain::pr::CheckState;
+use infra::{gh, git};
 
 const USAGE: &str = "usage: prtui [-C <dir>] [--dump]";
 
@@ -35,7 +34,7 @@ fn main() -> Result<()> {
     }
 
     let dir = git::main_worktree(&dir)?;
-    let repo = github::repo_name(&dir)?;
+    let repo = gh::repo_name(&dir)?;
 
     if dump {
         return dump_prs(dir, &repo);
@@ -82,14 +81,14 @@ fn run(mut terminal: DefaultTerminal, mut app: App) -> Result<()> {
 }
 
 fn dump_prs(dir: PathBuf, repo: &str) -> Result<()> {
-    let local = LocalState::read(&dir)?;
+    let local = git::read_local_state(&dir)?;
     println!(
         "{repo} @ {} (branch: {})",
         dir.display(),
         local.current_branch
     );
-    for p in github::fetch_prs(&dir, repo)? {
-        let state = if p.mergeable == "CONFLICTING" {
+    for p in gh::fetch_prs(&dir, repo)? {
+        let state = if p.is_conflicting() {
             "Conflict"
         } else if p.is_draft {
             "Draft"
