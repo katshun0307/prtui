@@ -4,9 +4,10 @@ use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Row, Table};
 
-use super::format::ago;
-use super::{DIM, HEADER_FG, SELECTED_BG};
+use super::format::{ago, devin_label};
+use super::{DIM, HEADER_FG, SELECTED_BG, devin_style};
 use crate::app::AppState;
+use crate::domain::devin::DevinSession;
 use crate::domain::local::LocalState;
 use crate::domain::pr::{CheckState, Pr, ReviewerState};
 
@@ -26,6 +27,7 @@ pub(super) fn draw_table(f: &mut Frame, state: &mut AppState, area: ratatui::lay
                 review_cell(p),
                 reviewer_cell(p),
                 local_cell(&state.local, p),
+                Cell::from(devin_span(state.devin_for(p))),
                 Cell::from(ago(p.updated_at)).fg(DIM),
                 title_cell(p),
             ])
@@ -54,6 +56,7 @@ pub(super) fn draw_table(f: &mut Frame, state: &mut AppState, area: ratatui::lay
             Constraint::Length(9),
             Constraint::Length(10),
             Constraint::Length(10),
+            Constraint::Length(11),
             Constraint::Length(4),
             Constraint::Fill(1),
         ],
@@ -70,6 +73,7 @@ pub(super) fn draw_table(f: &mut Frame, state: &mut AppState, area: ratatui::lay
             "Review",
             "Reviewer",
             "Local",
+            "Devin",
             "更新",
             "タイトル",
         ])
@@ -195,6 +199,14 @@ fn reviewer_cell(p: &Pr) -> Cell<'static> {
     Cell::from(Line::from(spans))
 }
 
+/// PR に紐づく最新の session の status. 2 件以上なら `×n` を付ける. session が無ければ空
+fn devin_span(found: Option<(&DevinSession, usize)>) -> Span<'static> {
+    match found {
+        Some((s, count)) => Span::styled(devin_label(s, count), devin_style(s)),
+        None => Span::raw(""),
+    }
+}
+
 fn local_cell(local: &LocalState, p: &Pr) -> Cell<'static> {
     let mark = if local.is_current(p) { "● " } else { "" };
     match local.sync_label(p) {
@@ -207,5 +219,30 @@ fn local_cell(local: &LocalState, p: &Pr) -> Cell<'static> {
                 cell.magenta()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::devin::DevinStatus;
+    use ratatui::style::Color;
+
+    #[test]
+    fn devin_span_label_and_color() {
+        let s = DevinSession {
+            status: DevinStatus::Suspended,
+            ..DevinSession::fixture("devin-1", "https://github.com/o/r/pull/1")
+        };
+        let span = devin_span(Some((&s, 1)));
+        assert_eq!(span.content, "suspended");
+        assert_eq!(span.style.fg, Some(Color::Cyan));
+        let span = devin_span(Some((&s, 3)));
+        assert_eq!(span.content, "suspended×3");
+    }
+
+    #[test]
+    fn devin_span_empty_without_session() {
+        assert_eq!(devin_span(None).content, "");
     }
 }

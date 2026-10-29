@@ -1,9 +1,11 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+use chrono::{Duration, Utc};
 
+use crate::domain::devin::session_for;
 use crate::domain::pr::CheckState;
-use crate::infra::{gh, git};
+use crate::infra::{devin, gh, git};
 use crate::ui;
 
 pub fn run(dir: PathBuf, repo: &str) -> Result<()> {
@@ -13,6 +15,15 @@ pub fn run(dir: PathBuf, repo: &str) -> Result<()> {
         dir.display(),
         local.current_branch
     );
+    // TUI と同じく 30 日以内に更新された session を見る. 取れなくても PR は出す
+    let sessions = match &local.devin {
+        Some(cfg) => devin::fetch_sessions(cfg, repo, Utc::now() - Duration::days(30))
+            .unwrap_or_else(|e| {
+                eprintln!("Devin session の取得失敗: {e}");
+                Vec::new()
+            }),
+        None => Vec::new(),
+    };
     for p in gh::fetch_prs(&dir, repo)? {
         let state = if p.is_conflicting() {
             "Conflict"
@@ -37,8 +48,10 @@ pub fn run(dir: PathBuf, repo: &str) -> Result<()> {
             .map(|r| format!("{}:{:?}", r.name, r.state))
             .collect::<Vec<_>>()
             .join(",");
+        let devin = session_for(&sessions, &p.url)
+            .map_or("-".into(), |(s, n)| ui::format::devin_label(s, n));
         println!(
-            "#{}\tstack={stack}\tbase={}\t{state}\t{ci}\tthreads={}/{}\tbehind_main={}\tsize=+{}/-{}\treview={}\treviewers={reviewers}\tlocal={mark}{}\t{}\t{}",
+            "#{}\tstack={stack}\tbase={}\t{state}\t{ci}\tthreads={}/{}\tbehind_main={}\tsize=+{}/-{}\treview={}\treviewers={reviewers}\tlocal={mark}{}\tdevin={devin}\t{}\t{}",
             p.number,
             p.base_ref_name,
             p.threads_open,
