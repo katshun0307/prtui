@@ -1,33 +1,61 @@
 //! キー入力とスレッドの結果を受けて AppState を更新し, 実行すべき副作用を Effect で返す.
 //! スレッドの起動や外部コマンドの実行はしない (runtime の責務).
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::event::{Effect, Event, WatchUntil};
-use super::state::AppState;
+use super::state::{AppState, ChatView};
 use crate::domain::linear::linear_issue_key;
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
 use crate::domain::review::review_targets;
 use crate::domain::stack::arrange;
 
-/// 全件を取り直す. 取得中なら何もしない
+/// 全件を取り直す間隔
+pub const AUTO_REFRESH: Duration = Duration::from_secs(300);
+/// 会話ビューを開いている間にメッセージを取り直す間隔
+pub const CHAT_POLL: Duration = Duration::from_secs(5);
+
+/// 全件を取り直す. 取得中なら何もしない.
+/// Devin を設定していれば session 一覧も取り直す. PR の取得とは独立に走らせる
 pub fn refresh(state: &mut AppState) -> Vec<Effect> {
-    if state.loading {
-        return vec![];
+    let mut effects = vec![];
+    if !state.loading {
+        state.loading = true;
+        state.last_fetch = Some(Instant::now());
+        effects.push(Effect::Fetch);
     }
-    state.loading = true;
-    state.last_fetch = Some(Instant::now());
-    vec![Effect::Fetch]
+    if state.local.devin.is_some() && !state.sessions_loading {
+        state.sessions_loading = true;
+        effects.push(Effect::FetchSessions);
+    }
+    effects
 }
 
-/// 時間で起きる遷移. main のループから毎回呼ぶ
+/// 時間で起きる遷移. main のループから毎回呼ぶ.
+/// 会話ビューのメッセージを `CHAT_POLL` ごとに, 全件を `AUTO_REFRESH` ごとに取り直す
 pub fn tick(state: &mut AppState, now: Instant) -> Vec<Effect> {
-    let _ = (state, now);
-    todo!()
+    let mut effects = vec![];
+    if let Some(chat) = state.chat.as_mut()
+        && !chat.fetching
+        && chat
+            .last_poll
+            .is_none_or(|t| now.saturating_duration_since(t) >= CHAT_POLL)
+    {
+        chat.fetching = true;
+        chat.last_poll = Some(now);
+        effects.push(Effect::FetchMessages(chat.session_id.clone()));
+    }
+    if state
+        .last_fetch
+        .is_some_and(|t| now.saturating_duration_since(t) >= AUTO_REFRESH)
+    {
+        effects.extend(refresh(state));
+    }
+    effects
 }
 
 pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
@@ -134,16 +162,85 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
             }
             vec![Effect::ReloadLocal]
         }
-        Event::DevinSessions(_)
-        | Event::DevinMessages(..)
-        | Event::DevinSent(..)
-        | Event::Composed(_) => todo!(),
+        Event::DevinSessions(res) => {
+            state.sessions_loading = false;
+            match res {
+                // 開いている session が一覧から消えても会話ビューはそのまま残す
+                Ok(sessions) => {
+                    state.devin_sessions = sessions;
+                    vec![Effect::SaveCache]
+                }
+                Err(e) => {
+                    state.error(format!("Devin session の取得失敗: {e}"));
+                    vec![]
+                }
+            }
+        }
+        Event::DevinMessages(id, res) => {
+            // 閉じたか別の session に移った後に届いた結果は捨てる
+            let Some(chat) = state.chat.as_mut().filter(|c| c.session_id == id) else {
+                return vec![];
+            };
+            chat.fetching = false;
+            match res {
+                Ok(messages) => {
+                    chat.messages = messages;
+                    chat.loaded = true;
+                    chat.error = None;
+                }
+                Err(e) => chat.error = Some(format!("メッセージの取得失敗: {e}")),
+            }
+            vec![]
+        }
+        Event::DevinSent(id, res) => {
+            let Some(chat) = state.chat.as_mut().filter(|c| c.session_id == id) else {
+                return vec![];
+            };
+            chat.sending = false;
+            match res {
+                Ok(session) => {
+                    chat.draft.clear();
+                    chat.typing = false;
+                    // 送ったメッセージをすぐ出すため次の tick で取り直す
+                    chat.last_poll = None;
+                    match state.devin_sessions.iter_mut().find(|s| s.id == session.id) {
+                        Some(s) => *s = session,
+                        None => state.devin_sessions.push(session),
+                    }
+                    vec![Effect::SaveCache]
+                }
+                Err(e) => {
+                    chat.error = Some(format!("送信失敗: {e}"));
+                    vec![]
+                }
+            }
+        }
+        Event::Composed(res) => {
+            let Some(chat) = state.chat.as_mut() else {
+                return vec![];
+            };
+            match res {
+                Ok(Some(text)) => {
+                    chat.draft = text.trim_end_matches(['\n', '\r']).to_string();
+                    send(chat)
+                }
+                // エディタを非 0 で終えたら取りやめ. draft は変えない
+                Ok(None) => vec![],
+                Err(e) => {
+                    chat.error = Some(format!("エディタの実行失敗: {e}"));
+                    vec![]
+                }
+            }
+        }
     }
 }
 
 pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         return vec![Effect::Quit];
+    }
+    if state.chat.is_some() {
+        return chat_key(state, key);
     }
     if let Some((n, base)) = state.confirm_update.take() {
         if key.code == KeyCode::Char('y') {
@@ -200,6 +297,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
             .collect(),
         KeyCode::Char('l') => open_linear(state),
         KeyCode::Char('L') => open_linear_review(state),
+        KeyCode::Char('v') => open_chat(state),
         KeyCode::Char('d') => state
             .selected()
             .map(|p| {
@@ -214,6 +312,96 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
             .collect(),
         _ => vec![],
     }
+}
+
+/// 選択中の PR に紐づく最新の Devin session の会話ビューを開く.
+/// メッセージは次の tick で取る
+fn open_chat(state: &mut AppState) -> Vec<Effect> {
+    if state.local.devin.is_none() {
+        state.error(NO_DEVIN_CONFIG.into());
+        return vec![];
+    }
+    let Some(pr) = state.selected() else {
+        return vec![];
+    };
+    let n = pr.number;
+    let Some(id) = state.devin_for(pr).map(|(s, _)| s.id.clone()) else {
+        state.error(format!("#{n} に Devin session が無い"));
+        return vec![];
+    };
+    state.message = None;
+    state.chat = Some(ChatView::new(id));
+    vec![]
+}
+
+const NO_DEVIN_CONFIG: &str = "Devin の設定が無い. git config prtui.devin-token <token> と prtui.devin-org <org-id> を設定する";
+
+/// 会話ビューのキー. 1 行入力中は Enter と Esc と Backspace 以外を文字として draft に足す
+fn chat_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
+    let url = state.chat_session().map(|s| s.url.clone());
+    let Some(chat) = state.chat.as_mut() else {
+        return vec![];
+    };
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    if chat.typing {
+        match key.code {
+            KeyCode::Enter => return send(chat),
+            KeyCode::Esc => chat.typing = false,
+            KeyCode::Backspace => {
+                chat.draft.pop();
+            }
+            KeyCode::Char(c) if !ctrl => chat.draft.push(c),
+            _ => {}
+        }
+        return vec![];
+    }
+    let half = (chat.viewport_height / 2).max(1) as isize;
+    match key.code {
+        KeyCode::Char('d') if ctrl => scroll_by(chat, half),
+        KeyCode::Char('u') if ctrl => scroll_by(chat, -half),
+        KeyCode::PageDown => scroll_by(chat, half),
+        KeyCode::PageUp => scroll_by(chat, -half),
+        KeyCode::Char('j') | KeyCode::Down => scroll_by(chat, 1),
+        KeyCode::Char('k') | KeyCode::Up => scroll_by(chat, -1),
+        KeyCode::Char('g') => chat.scroll = Some(0),
+        KeyCode::Char('G') => chat.scroll = None,
+        KeyCode::Char('i') => chat.typing = true,
+        KeyCode::Char('e') if !chat.sending => {
+            return vec![Effect::Compose {
+                draft: chat.draft.clone(),
+            }];
+        }
+        KeyCode::Char('o') => match url {
+            Some(url) => return vec![Effect::OpenUrl(url)],
+            None => chat.error = Some(format!("{} が session 一覧に無い", chat.session_id)),
+        },
+        KeyCode::Char('r') => chat.last_poll = None,
+        KeyCode::Esc | KeyCode::Char('q') if !chat.sending => state.chat = None,
+        _ => {}
+    }
+    vec![]
+}
+
+/// 表示位置を動かす. 末尾まで行ったら末尾追従に戻す
+fn scroll_by(chat: &mut ChatView, delta: isize) {
+    let cur = chat.scroll.unwrap_or(chat.max_scroll) as isize;
+    let next = (cur + delta).clamp(0, chat.max_scroll as isize) as usize;
+    chat.scroll = (next < chat.max_scroll).then_some(next);
+}
+
+/// draft を送る. 空白だけか送信中なら何もしない
+fn send(chat: &mut ChatView) -> Vec<Effect> {
+    let text = chat.draft.trim();
+    if text.is_empty() || chat.sending {
+        return vec![];
+    }
+    let text = text.to_string();
+    chat.sending = true;
+    chat.error = None;
+    vec![Effect::SendMessage {
+        session_id: chat.session_id.clone(),
+        text,
+    }]
 }
 
 /// 選択中の PR に対応する Linear の issue をブラウザで開く.
@@ -356,13 +544,15 @@ fn checkout(state: &mut AppState) -> Vec<Effect> {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::time::{Duration, Instant};
 
     use anyhow::anyhow;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-    use super::{handle_event, handle_key};
+    use super::{AUTO_REFRESH, CHAT_POLL, handle_event, handle_key, refresh, tick};
     use crate::app::event::{Effect, Event, WatchUntil};
-    use crate::app::state::AppState;
+    use crate::app::state::{AppState, ChatView};
+    use crate::domain::devin::{DevinConfig, DevinSession};
     use crate::domain::local::LocalState;
     use crate::domain::op::PrOp;
     use crate::domain::pr::{Pr, Reviewer, ReviewerState};
@@ -617,5 +807,342 @@ mod tests {
         let alice = WatchUntil::Requested(vec!["alice".into()]);
         assert!(alice.is_done(Some(&requested)));
         assert!(!alice.is_done(Some(&open)));
+    }
+
+    fn devin_state(prs: Vec<Pr>) -> AppState {
+        let mut s = state(prs);
+        s.local.devin = Some(DevinConfig {
+            token: "t".into(),
+            org: "org-1".into(),
+        });
+        s
+    }
+
+    /// 会話ビューを直接開いた状態
+    fn chat_state() -> AppState {
+        let mut s = devin_state(vec![pr(1)]);
+        s.devin_sessions = vec![DevinSession::fixture(
+            "devin-a",
+            "https://github.com/o/r/pull/1",
+        )];
+        s.chat = Some(ChatView::new("devin-a".into()));
+        s
+    }
+
+    fn chat(s: &AppState) -> &ChatView {
+        s.chat.as_ref().expect("chat")
+    }
+
+    fn code(c: KeyCode) -> KeyEvent {
+        KeyEvent::new(c, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn refresh_fetches_sessions_only_with_config() {
+        let mut s = state(vec![]);
+        assert_eq!(refresh(&mut s), vec![Effect::Fetch]);
+        assert!(!s.sessions_loading);
+
+        let mut s = devin_state(vec![]);
+        assert_eq!(refresh(&mut s), vec![Effect::Fetch, Effect::FetchSessions]);
+        assert!(s.sessions_loading);
+        // 取得中はどちらも出さない
+        assert!(refresh(&mut s).is_empty());
+
+        // PR の取得中でも session は独立に取る
+        s.sessions_loading = false;
+        assert_eq!(refresh(&mut s), vec![Effect::FetchSessions]);
+    }
+
+    #[test]
+    fn view_without_config_is_error() {
+        let mut s = state(vec![pr(1)]);
+        assert!(handle_key(&mut s, key('v')).is_empty());
+        assert!(s.chat.is_none());
+        assert!(message(&s).0.starts_with("Devin の設定が無い"));
+        assert!(message(&s).1);
+    }
+
+    #[test]
+    #[ignore = "session_for の実装待ち"]
+    fn view_without_session_is_error() {
+        let mut s = devin_state(vec![pr(1)]);
+        assert!(handle_key(&mut s, key('v')).is_empty());
+        assert!(s.chat.is_none());
+        assert_eq!(message(&s), ("#1 に Devin session が無い", true));
+    }
+
+    #[test]
+    #[ignore = "session_for の実装待ち"]
+    fn view_opens_latest_session() {
+        let mut p = pr(1);
+        p.url = "https://github.com/o/r/pull/1".into();
+        let mut s = devin_state(vec![p]);
+        let old = DevinSession::fixture("devin-old", "https://github.com/o/r/pull/1");
+        let mut new = DevinSession::fixture("devin-new", "https://github.com/O/R/pull/1/");
+        new.updated_at = old.updated_at + chrono::Duration::seconds(1);
+        s.devin_sessions = vec![old, new];
+        s.info("x".into());
+        assert!(handle_key(&mut s, key('v')).is_empty());
+        assert_eq!(chat(&s).session_id, "devin-new");
+        assert!(chat(&s).last_poll.is_none());
+        assert!(s.message.is_none());
+    }
+
+    #[test]
+    fn tick_polls_messages() {
+        let mut s = chat_state();
+        let now = Instant::now();
+        assert_eq!(
+            tick(&mut s, now),
+            vec![Effect::FetchMessages("devin-a".into())]
+        );
+        assert!(chat(&s).fetching);
+        // 取得中は出さない
+        assert!(tick(&mut s, now + CHAT_POLL * 2).is_empty());
+
+        handle_event(&mut s, Event::DevinMessages("devin-a".into(), Ok(vec![])));
+        assert!(!chat(&s).fetching);
+        assert!(chat(&s).loaded);
+        // 間隔が空いていなければ出さない
+        assert!(tick(&mut s, now + Duration::from_secs(1)).is_empty());
+        assert_eq!(
+            tick(&mut s, now + CHAT_POLL),
+            vec![Effect::FetchMessages("devin-a".into())]
+        );
+    }
+
+    #[test]
+    fn tick_auto_refresh() {
+        let mut s = state(vec![]);
+        let now = Instant::now();
+        assert!(tick(&mut s, now).is_empty());
+        s.last_fetch = Some(now);
+        assert!(tick(&mut s, now + Duration::from_secs(1)).is_empty());
+        assert_eq!(tick(&mut s, now + AUTO_REFRESH), vec![Effect::Fetch]);
+        assert!(s.loading);
+    }
+
+    #[test]
+    fn chat_r_polls_now() {
+        let mut s = chat_state();
+        s.chat.as_mut().unwrap().last_poll = Some(Instant::now());
+        handle_key(&mut s, key('r'));
+        assert!(chat(&s).last_poll.is_none());
+    }
+
+    #[test]
+    fn chat_typing_and_send() {
+        let mut s = chat_state();
+        assert!(handle_key(&mut s, key('i')).is_empty());
+        assert!(chat(&s).typing);
+        // 入力中の q は文字として入る
+        for c in " qx".chars() {
+            handle_key(&mut s, key(c));
+        }
+        handle_key(&mut s, code(KeyCode::Backspace));
+        assert_eq!(chat(&s).draft, " q");
+        assert!(s.chat.is_some());
+        assert_eq!(
+            handle_key(&mut s, code(KeyCode::Enter)),
+            vec![Effect::SendMessage {
+                session_id: "devin-a".into(),
+                text: "q".into(),
+            }]
+        );
+        assert!(chat(&s).sending);
+        // 送信中は重ねて送らない
+        assert!(handle_key(&mut s, code(KeyCode::Enter)).is_empty());
+    }
+
+    #[test]
+    fn chat_blank_draft_is_not_sent() {
+        let mut s = chat_state();
+        handle_key(&mut s, key('i'));
+        handle_key(&mut s, key(' '));
+        assert!(handle_key(&mut s, code(KeyCode::Enter)).is_empty());
+        assert!(!chat(&s).sending);
+    }
+
+    #[test]
+    fn chat_esc_stops_typing_then_closes() {
+        let mut s = chat_state();
+        handle_key(&mut s, key('i'));
+        handle_key(&mut s, key('a'));
+        handle_key(&mut s, code(KeyCode::Esc));
+        assert!(!chat(&s).typing);
+        assert_eq!(chat(&s).draft, "a");
+        assert!(handle_key(&mut s, code(KeyCode::Esc)).is_empty());
+        assert!(s.chat.is_none());
+    }
+
+    #[test]
+    fn chat_close_ignored_while_sending() {
+        let mut s = chat_state();
+        s.chat.as_mut().unwrap().sending = true;
+        handle_key(&mut s, key('q'));
+        handle_key(&mut s, code(KeyCode::Esc));
+        assert!(s.chat.is_some());
+        // e も送信中は無視する
+        assert!(handle_key(&mut s, key('e')).is_empty());
+        // Ctrl-C は常に終了
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(handle_key(&mut s, ctrl_c), vec![Effect::Quit]);
+    }
+
+    #[test]
+    fn chat_compose_and_open() {
+        let mut s = chat_state();
+        s.chat.as_mut().unwrap().draft = "hi".into();
+        assert_eq!(
+            handle_key(&mut s, key('e')),
+            vec![Effect::Compose { draft: "hi".into() }]
+        );
+        assert_eq!(
+            handle_key(&mut s, key('o')),
+            vec![Effect::OpenUrl(
+                "https://app.devin.ai/sessions/devin-a".into()
+            )]
+        );
+    }
+
+    #[test]
+    fn chat_scroll() {
+        let mut s = chat_state();
+        {
+            let c = s.chat.as_mut().unwrap();
+            c.max_scroll = 10;
+            c.viewport_height = 6;
+        }
+        handle_key(&mut s, key('k'));
+        assert_eq!(chat(&s).scroll, Some(9));
+        handle_key(&mut s, code(KeyCode::PageUp));
+        assert_eq!(chat(&s).scroll, Some(6));
+        handle_key(
+            &mut s,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(chat(&s).scroll, Some(3));
+        handle_key(&mut s, key('g'));
+        assert_eq!(chat(&s).scroll, Some(0));
+        handle_key(&mut s, key('k'));
+        assert_eq!(chat(&s).scroll, Some(0));
+        // 末尾まで戻ったら追従に戻す
+        handle_key(&mut s, code(KeyCode::PageDown));
+        handle_key(&mut s, code(KeyCode::PageDown));
+        handle_key(&mut s, code(KeyCode::PageDown));
+        handle_key(&mut s, code(KeyCode::PageDown));
+        assert_eq!(chat(&s).scroll, None);
+        handle_key(&mut s, key('g'));
+        handle_key(&mut s, key('G'));
+        assert_eq!(chat(&s).scroll, None);
+    }
+
+    #[test]
+    fn messages_for_other_session_are_dropped() {
+        let mut s = chat_state();
+        s.chat.as_mut().unwrap().fetching = true;
+        let effects = handle_event(&mut s, Event::DevinMessages("devin-b".into(), Ok(vec![])));
+        assert!(effects.is_empty());
+        assert!(chat(&s).fetching);
+        assert!(!chat(&s).loaded);
+    }
+
+    #[test]
+    fn messages_err_goes_to_chat() {
+        let mut s = chat_state();
+        s.chat.as_mut().unwrap().fetching = true;
+        handle_event(
+            &mut s,
+            Event::DevinMessages("devin-a".into(), Err(anyhow!("boom"))),
+        );
+        assert!(!chat(&s).fetching);
+        assert_eq!(
+            chat(&s).error.as_deref(),
+            Some("メッセージの取得失敗: boom")
+        );
+    }
+
+    #[test]
+    fn sent_ok_clears_draft_and_updates_session() {
+        let mut s = chat_state();
+        {
+            let c = s.chat.as_mut().unwrap();
+            c.draft = "hi".into();
+            c.typing = true;
+            c.sending = true;
+            c.last_poll = Some(Instant::now());
+        }
+        let mut sent = DevinSession::fixture("devin-a", "https://github.com/o/r/pull/1");
+        sent.status = crate::domain::devin::DevinStatus::Resuming;
+        let effects = handle_event(&mut s, Event::DevinSent("devin-a".into(), Ok(sent)));
+        assert_eq!(effects, vec![Effect::SaveCache]);
+        let c = chat(&s);
+        assert!(!c.sending && !c.typing && c.draft.is_empty() && c.last_poll.is_none());
+        assert_eq!(s.devin_sessions.len(), 1);
+        assert_eq!(
+            s.chat_session().map(|x| x.status),
+            Some(crate::domain::devin::DevinStatus::Resuming)
+        );
+    }
+
+    #[test]
+    fn sent_err_keeps_draft() {
+        let mut s = chat_state();
+        {
+            let c = s.chat.as_mut().unwrap();
+            c.draft = "hi".into();
+            c.sending = true;
+        }
+        let effects = handle_event(
+            &mut s,
+            Event::DevinSent("devin-a".into(), Err(anyhow!("409 conflict"))),
+        );
+        assert!(effects.is_empty());
+        let c = chat(&s);
+        assert!(!c.sending);
+        assert_eq!(c.draft, "hi");
+        assert_eq!(c.error.as_deref(), Some("送信失敗: 409 conflict"));
+    }
+
+    #[test]
+    fn composed_sends_or_cancels() {
+        let mut s = chat_state();
+        s.chat.as_mut().unwrap().draft = "old".into();
+        assert!(handle_event(&mut s, Event::Composed(Ok(None))).is_empty());
+        assert_eq!(chat(&s).draft, "old");
+
+        let effects = handle_event(&mut s, Event::Composed(Ok(Some("a\nb\n\n".into()))));
+        assert_eq!(chat(&s).draft, "a\nb");
+        assert_eq!(
+            effects,
+            vec![Effect::SendMessage {
+                session_id: "devin-a".into(),
+                text: "a\nb".into(),
+            }]
+        );
+
+        let mut s = chat_state();
+        assert!(handle_event(&mut s, Event::Composed(Ok(Some(" \n".into())))).is_empty());
+        assert!(!chat(&s).sending);
+        handle_event(&mut s, Event::Composed(Err(anyhow!("boom"))));
+        assert!(chat(&s).error.is_some());
+    }
+
+    #[test]
+    fn sessions_event() {
+        let mut s = chat_state();
+        s.sessions_loading = true;
+        let effects = handle_event(&mut s, Event::DevinSessions(Ok(vec![])));
+        assert_eq!(effects, vec![Effect::SaveCache]);
+        assert!(!s.sessions_loading);
+        // 開いている session が一覧から消えても会話ビューは残す
+        assert!(s.chat.is_some());
+        assert!(s.chat_session().is_none());
+
+        s.sessions_loading = true;
+        assert!(handle_event(&mut s, Event::DevinSessions(Err(anyhow!("boom")))).is_empty());
+        assert!(!s.sessions_loading);
+        assert_eq!(message(&s), ("Devin session の取得失敗: boom", true));
     }
 }

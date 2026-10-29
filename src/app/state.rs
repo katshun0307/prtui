@@ -5,7 +5,7 @@ use std::time::Instant;
 use chrono::{DateTime, Utc};
 use ratatui::widgets::TableState;
 
-use crate::domain::devin::{DevinMessage, DevinSession};
+use crate::domain::devin::{DevinMessage, DevinSession, session_for};
 use crate::domain::local::LocalState;
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
@@ -39,6 +39,15 @@ pub struct ChatView {
     pub sending: bool,
     /// 会話ビューのフッターに出すエラー
     pub error: Option<String>,
+}
+
+impl ChatView {
+    pub fn new(session_id: String) -> Self {
+        Self {
+            session_id,
+            ..Default::default()
+        }
+    }
 }
 
 pub struct AppState {
@@ -112,13 +121,13 @@ impl AppState {
 
     /// 会話ビューで開いている session
     pub fn chat_session(&self) -> Option<&DevinSession> {
-        todo!()
+        let id = &self.chat.as_ref()?.session_id;
+        self.devin_sessions.iter().find(|s| &s.id == id)
     }
 
     /// PR に紐づく最新の Devin session と件数
     pub fn devin_for(&self, pr: &Pr) -> Option<(&DevinSession, usize)> {
-        let _ = pr;
-        todo!()
+        session_for(&self.devin_sessions, &pr.url)
     }
 
     /// 一覧を差し替える. 並びが変わっても同じ PR を選んだままにする

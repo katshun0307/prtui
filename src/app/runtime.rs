@@ -1,24 +1,29 @@
 //! update が返した Effect を実行する. スレッドの起動と infra の呼び出しはここに閉じる.
 
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use anyhow::{Result, anyhow};
 use chrono::Utc;
 use ratatui::crossterm::event::KeyEvent;
 
 use super::event::{Action, Effect, Event, WatchUntil};
 use super::state::AppState;
 use super::update;
+use crate::domain::devin::DevinConfig;
 use crate::infra::cache::{self, Cache};
+use crate::infra::devin::{fetch_messages, fetch_sessions, send_message};
 use crate::infra::gh::{self, fetch_pr, fetch_prs, linear_review_url, update_branch};
 use crate::infra::git::read_local_state;
 use crate::infra::process::open_url;
 
-pub const AUTO_REFRESH: Duration = Duration::from_secs(300);
+/// Devin session 一覧を取る期間
+const SESSIONS_SINCE_DAYS: i64 = 30;
 /// 操作の反映を待って PR を取り直す間隔と回数. update-branch は GitHub 側で非同期に merge される
 const WATCH_INTERVAL: Duration = Duration::from_secs(2);
 const WATCH_TRIES: usize = 10;
@@ -27,6 +32,8 @@ pub struct App {
     pub state: AppState,
     tx: Sender<Event>,
     rx: Receiver<Event>,
+    /// `Effect::Compose` でエディタに渡した一時ファイル. 戻ったら読んで消す
+    pending_compose: Option<PathBuf>,
 }
 
 impl App {
@@ -38,7 +45,12 @@ impl App {
         state.fetched_at = cached.as_ref().map(|c| c.fetched_at);
         state.from_cache = cached.is_some();
         state.prs = cached.map(|c| c.prs).unwrap_or_default();
-        let mut app = Self { state, tx, rx };
+        let mut app = Self {
+            state,
+            tx,
+            rx,
+            pending_compose: None,
+        };
         app.refresh();
         app
     }
@@ -56,21 +68,40 @@ impl App {
 
     /// 時間で起きる遷移を進める. main のループから毎回呼ぶ
     pub fn tick(&mut self) {
-        todo!()
+        let effects = update::tick(&mut self.state, Instant::now());
+        self.perform(effects);
     }
 
-    /// `Action::Suspend` の外部コマンドが終わった後に main が呼ぶ
+    /// `Action::Suspend` の外部コマンドが終わった後に main が呼ぶ.
+    /// エディタから戻ったときは書いた内容を `Event::Composed` にする
     pub fn resumed(&mut self, status: io::Result<ExitStatus>) {
-        let _ = status;
-        todo!()
+        let Some(path) = self.pending_compose.take() else {
+            if let Err(e) = status {
+                self.state.error(e.to_string());
+            }
+            return;
+        };
+        let res = match status {
+            Ok(s) if s.success() => fs::read_to_string(&path)
+                .map(Some)
+                .map_err(|e| anyhow!("{}: {e}", path.display())),
+            Ok(_) => Ok(None),
+            Err(e) => Err(e.into()),
+        };
+        let _ = fs::remove_file(&path);
+        self.handle_event(Event::Composed(res));
     }
 
     /// スレッドから届いた結果をすべて反映する
     pub fn pump(&mut self) {
         while let Ok(ev) = self.rx.try_recv() {
-            let effects = update::handle_event(&mut self.state, ev);
-            self.perform(effects);
+            self.handle_event(ev);
         }
+    }
+
+    fn handle_event(&mut self, ev: Event) {
+        let effects = update::handle_event(&mut self.state, ev);
+        self.perform(effects);
     }
 
     /// Effect を順に実行する. Quit と Suspend は main への Action にする
@@ -117,10 +148,47 @@ impl App {
                         self.state.error(e.to_string());
                     }
                 }
-                Effect::FetchSessions => todo!(),
-                Effect::FetchMessages(_) => todo!(),
-                Effect::SendMessage { .. } => todo!(),
-                Effect::Compose { .. } => todo!(),
+                Effect::FetchSessions => {
+                    // update は config があるときだけ出す
+                    if let Some(cfg) = self.state.local.devin.clone() {
+                        self.spawn(move |_, repo| {
+                            let since = Utc::now() - chrono::Duration::days(SESSIONS_SINCE_DAYS);
+                            Event::DevinSessions(fetch_sessions(&cfg, repo, since))
+                        });
+                    }
+                }
+                Effect::FetchMessages(id) => {
+                    let cfg = self.state.local.devin.clone();
+                    self.spawn(move |_, _| {
+                        let res = with_devin(cfg.as_ref(), |c| fetch_messages(c, &id));
+                        Event::DevinMessages(id, res)
+                    });
+                }
+                Effect::SendMessage { session_id, text } => {
+                    let cfg = self.state.local.devin.clone();
+                    self.spawn(move |_, _| {
+                        let res = with_devin(cfg.as_ref(), |c| send_message(c, &session_id, &text));
+                        Event::DevinSent(session_id, res)
+                    });
+                }
+                Effect::Compose { draft } => {
+                    let path =
+                        std::env::temp_dir().join(format!("prtui-devin-{}.md", std::process::id()));
+                    match fs::write(&path, draft) {
+                        Ok(()) => {
+                            action = Action::Suspend(vec![
+                                "sh".into(),
+                                "-c".into(),
+                                "${VISUAL:-${EDITOR:-vi}} \"$1\"".into(),
+                                "sh".into(),
+                                path.display().to_string(),
+                            ]);
+                            self.pending_compose = Some(path);
+                        }
+                        Err(e) => self
+                            .handle_event(Event::Composed(Err(anyhow!("{}: {e}", path.display())))),
+                    }
+                }
             }
         }
         action
@@ -186,4 +254,12 @@ impl App {
         self.state.busy = Some(format!("#{n} をチェックアウト中…"));
         self.spawn(move |dir, _| Event::CheckedOut(n, gh::checkout(dir, n)));
     }
+}
+
+/// Devin の config が無ければ API を呼ばずにエラーにする. 実行中に config を消されたときに備える
+fn with_devin<T>(
+    cfg: Option<&DevinConfig>,
+    f: impl FnOnce(&DevinConfig) -> Result<T>,
+) -> Result<T> {
+    f(cfg.ok_or_else(|| anyhow!("Devin の設定が無い"))?)
 }
