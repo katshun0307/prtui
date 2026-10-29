@@ -864,7 +864,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "session_for の実装待ち"]
+
     fn view_without_session_is_error() {
         let mut s = devin_state(vec![pr(1)]);
         assert!(handle_key(&mut s, key('v')).is_empty());
@@ -873,7 +873,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "session_for の実装待ち"]
+
     fn view_opens_latest_session() {
         let mut p = pr(1);
         p.url = "https://github.com/o/r/pull/1".into();

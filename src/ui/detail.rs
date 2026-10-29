@@ -2,7 +2,6 @@ use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
-use super::format::status_label;
 use super::{DIM, devin_style};
 use crate::app::AppState;
 use crate::domain::devin::DevinSession;
@@ -68,7 +67,7 @@ pub(super) fn detail_view(state: &AppState) -> Paragraph<'static> {
 fn devin_line(s: &DevinSession) -> Line<'static> {
     Line::from(vec![
         Span::raw("devin: ").fg(DIM),
-        Span::styled(status_label(s.status), devin_style(s)),
+        Span::styled(s.status.label(), devin_style(s)),
         Span::raw(" "),
         Span::raw(s.url.clone()).fg(DIM).underlined(),
     ])

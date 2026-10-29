@@ -5,7 +5,6 @@ use ratatui::style::Stylize;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use super::format::status_label;
 use super::{DIM, devin_style};
 use crate::app::AppState;
 use crate::domain::devin::{DevinMessage, DevinSession};
@@ -63,7 +62,7 @@ fn header_line(pr: Option<&Pr>, session: Option<&DevinSession>, session_id: &str
     }
     match session {
         Some(s) => spans.push(Span::styled(
-            format!("[{}]", status_label(s.status)),
+            format!("[{}]", s.status.label()),
             devin_style(s),
         )),
         None => spans.push(Span::raw(format!("[{session_id}]")).fg(DIM)),

@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 
-use crate::domain::devin::{DevinSession, DevinStatus};
+use crate::domain::devin::DevinSession;
 
 pub fn ago(t: DateTime<Utc>) -> String {
     ago_at(t, Utc::now())
@@ -15,23 +15,9 @@ fn ago_at(t: DateTime<Utc>, now: DateTime<Utc>) -> String {
     }
 }
 
-/// Devin session の status を API の表記のまま出す
-pub fn status_label(s: DevinStatus) -> &'static str {
-    match s {
-        DevinStatus::New => "new",
-        DevinStatus::Claimed => "claimed",
-        DevinStatus::Running => "running",
-        DevinStatus::Exit => "exit",
-        DevinStatus::Error => "error",
-        DevinStatus::Suspended => "suspended",
-        DevinStatus::Resuming => "resuming",
-        DevinStatus::Unknown => "unknown",
-    }
-}
-
 /// 一覧の Devin 列と dump の表示. PR に session が 2 件以上あれば `×n` を付ける
 pub fn devin_label(s: &DevinSession, count: usize) -> String {
-    let label = status_label(s.status);
+    let label = s.status.label();
     if count > 1 {
         format!("{label}×{count}")
     } else {
@@ -42,6 +28,7 @@ pub fn devin_label(s: &DevinSession, count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::devin::DevinStatus;
     use chrono::Duration;
 
     fn at(secs: i64) -> String {
