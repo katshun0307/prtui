@@ -48,7 +48,7 @@ pub fn run(dir: PathBuf, repo: &str) -> Result<()> {
             p.deletions,
             p.review_decision.as_deref().unwrap_or("-"),
             local.sync_label(&p).unwrap_or("-"),
-            ui::ago(p.updated_at),
+            ui::format::ago(p.updated_at),
             p.title,
         );
     }
