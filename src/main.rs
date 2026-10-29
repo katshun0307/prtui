@@ -12,7 +12,7 @@ use anyhow::{Context, Result, bail};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event as TermEvent, KeyEventKind};
 
-use app::{AUTO_REFRESH, Action, App};
+use app::{Action, App};
 use infra::{gh, git};
 
 const USAGE: &str = "usage: prtui [-C <dir>] [--dump]";
@@ -63,21 +63,13 @@ fn run(mut terminal: DefaultTerminal, mut app: App) -> Result<()> {
                         .current_dir(&app.state.dir)
                         .status();
                     terminal = ratatui::init();
-                    if let Err(e) = status {
-                        app.state.error(e.to_string());
-                    }
+                    app.resumed(status);
                 }
                 Action::None => {}
             }
         }
 
         app.pump();
-        if app
-            .state
-            .last_fetch
-            .is_some_and(|t| t.elapsed() >= AUTO_REFRESH)
-        {
-            app.refresh();
-        }
+        app.tick();
     }
 }
