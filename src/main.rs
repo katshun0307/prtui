@@ -1,5 +1,6 @@
 mod app;
 mod domain;
+mod dump;
 mod infra;
 mod ui;
 
@@ -12,7 +13,6 @@ use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event as TermEvent, KeyEventKind};
 
 use app::{AUTO_REFRESH, Action, App};
-use domain::pr::CheckState;
 use infra::{gh, git};
 
 const USAGE: &str = "usage: prtui [-C <dir>] [--dump]";
@@ -37,7 +37,7 @@ fn main() -> Result<()> {
     let repo = gh::repo_name(&dir)?;
 
     if dump {
-        return dump_prs(dir, &repo);
+        return dump::run(dir, &repo);
     }
 
     let terminal = ratatui::init();
@@ -48,7 +48,7 @@ fn main() -> Result<()> {
 
 fn run(mut terminal: DefaultTerminal, mut app: App) -> Result<()> {
     loop {
-        terminal.draw(|f| ui::draw(f, &mut app))?;
+        terminal.draw(|f| ui::draw(f, &mut app.state))?;
 
         if event::poll(Duration::from_millis(200))?
             && let TermEvent::Key(key) = event::read()?
@@ -60,11 +60,11 @@ fn run(mut terminal: DefaultTerminal, mut app: App) -> Result<()> {
                     ratatui::restore();
                     let status = Command::new(&cmd[0])
                         .args(&cmd[1..])
-                        .current_dir(&app.dir)
+                        .current_dir(&app.state.dir)
                         .status();
                     terminal = ratatui::init();
                     if let Err(e) = status {
-                        app.error(e.to_string());
+                        app.state.error(e.to_string());
                     }
                 }
                 Action::None => {}
@@ -74,57 +74,12 @@ fn run(mut terminal: DefaultTerminal, mut app: App) -> Result<()> {
         while let Ok(ev) = app.rx.try_recv() {
             app.handle_event(ev);
         }
-        if app.last_fetch.is_some_and(|t| t.elapsed() >= AUTO_REFRESH) {
+        if app
+            .state
+            .last_fetch
+            .is_some_and(|t| t.elapsed() >= AUTO_REFRESH)
+        {
             app.refresh();
         }
     }
-}
-
-fn dump_prs(dir: PathBuf, repo: &str) -> Result<()> {
-    let local = git::read_local_state(&dir)?;
-    println!(
-        "{repo} @ {} (branch: {})",
-        dir.display(),
-        local.current_branch
-    );
-    for p in gh::fetch_prs(&dir, repo)? {
-        let state = if p.is_conflicting() {
-            "Conflict"
-        } else if p.is_draft {
-            "Draft"
-        } else {
-            "Ready"
-        };
-        let ci = format!(
-            "ok={} fail={} pending={}",
-            p.count_checks(CheckState::Success),
-            p.count_checks(CheckState::Failure),
-            p.count_checks(CheckState::Pending),
-        );
-        let mark = if local.is_current(&p) { "*" } else { "" };
-        let stack = p
-            .stack
-            .map_or("-".into(), |s| format!("{}/{}", s.pos, s.len));
-        let reviewers = p
-            .reviewers
-            .iter()
-            .map(|r| format!("{}:{:?}", r.name, r.state))
-            .collect::<Vec<_>>()
-            .join(",");
-        println!(
-            "#{}\tstack={stack}\tbase={}\t{state}\t{ci}\tthreads={}/{}\tbehind_main={}\tsize=+{}/-{}\treview={}\treviewers={reviewers}\tlocal={mark}{}\t{}\t{}",
-            p.number,
-            p.base_ref_name,
-            p.threads_open,
-            p.threads_total,
-            p.behind_main.map_or("-".into(), |b| b.to_string()),
-            p.additions,
-            p.deletions,
-            p.review_decision.as_deref().unwrap_or("-"),
-            local.sync_label(&p).unwrap_or("-"),
-            ui::ago(p.updated_at),
-            p.title,
-        );
-    }
-    Ok(())
 }

@@ -5,7 +5,7 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
 
-use crate::app::App;
+use crate::app::AppState;
 use crate::domain::local::LocalState;
 use crate::domain::pr::{CheckState, Pr, ReviewerState};
 
@@ -24,7 +24,7 @@ const DIM: Color = Color::Indexed(245);
 const SELECTED_BG: Color = Color::Indexed(237);
 const HEADER_FG: Color = Color::Indexed(250);
 
-pub fn draw(f: &mut Frame, app: &mut App) {
+pub fn draw(f: &mut Frame, state: &mut AppState) {
     let [header, list, detail, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(5),
@@ -33,37 +33,37 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     ])
     .areas(f.area());
 
-    f.render_widget(header_line(app), header);
-    draw_table(f, app, list);
-    f.render_widget(detail_view(app), detail);
-    f.render_widget(footer_line(app), footer);
+    f.render_widget(header_line(state), header);
+    draw_table(f, state, list);
+    f.render_widget(detail_view(state), detail);
+    f.render_widget(footer_line(state), footer);
 }
 
-fn header_line(app: &App) -> Line<'static> {
+fn header_line(state: &AppState) -> Line<'static> {
     let mut spans = vec![
-        Span::raw(format!(" {} ", app.repo)).bold(),
-        Span::raw(format!("{}  ", app.dir.display())).fg(DIM),
-        Span::raw(format!("branch: {}", app.local.current_branch)).cyan(),
+        Span::raw(format!(" {} ", state.repo)).bold(),
+        Span::raw(format!("{}  ", state.dir.display())).fg(DIM),
+        Span::raw(format!("branch: {}", state.local.current_branch)).cyan(),
     ];
-    if let Some(t) = app.fetched_at {
-        let label = if app.from_cache {
+    if let Some(t) = state.fetched_at {
+        let label = if state.from_cache {
             format!("  取得 {} 前 (キャッシュ)", ago(t))
         } else {
             format!("  取得 {} 前", ago(t))
         };
         spans.push(Span::raw(label).fg(DIM));
     }
-    if app.local.dirty {
+    if state.local.dirty {
         spans.push(Span::raw("  未コミットの変更あり").yellow());
     }
-    if app.draft_only {
+    if state.draft_only {
         spans.push(Span::raw("  [Draft のみ]").magenta());
     }
     Line::from(spans)
 }
 
-fn draw_table(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
-    let rows: Vec<Row> = app
+fn draw_table(f: &mut Frame, state: &mut AppState, area: ratatui::layout::Rect) {
+    let rows: Vec<Row> = state
         .visible()
         .into_iter()
         .map(|p| {
@@ -77,16 +77,16 @@ fn draw_table(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
                 size_cell(p),
                 review_cell(p),
                 reviewer_cell(p),
-                local_cell(&app.local, p),
+                local_cell(&state.local, p),
                 Cell::from(ago(p.updated_at)).fg(DIM),
                 title_cell(p),
             ])
         })
         .collect();
     let count = rows.len();
-    let mut syncing: Vec<_> = app.syncing.iter().map(|n| format!("#{n}")).collect();
+    let mut syncing: Vec<_> = state.syncing.iter().map(|n| format!("#{n}")).collect();
     syncing.sort();
-    let title = if app.loading {
+    let title = if state.loading {
         format!(" PR {count} 件 (更新中…) ")
     } else if !syncing.is_empty() {
         format!(" PR {count} 件 ({} を同期中…) ", syncing.join(" "))
@@ -139,7 +139,7 @@ fn draw_table(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     )
     .row_highlight_style(Style::new().bg(SELECTED_BG))
     .highlight_symbol(Span::raw("▶ ").cyan().bold());
-    f.render_stateful_widget(table, area, &mut app.table);
+    f.render_stateful_widget(table, area, &mut state.table);
 }
 
 /// stack 内の位置 `段/段数`. main に近い側が 1. stack に入っていなければ空
@@ -283,12 +283,12 @@ fn local_cell(local: &LocalState, p: &Pr) -> Cell<'static> {
     }
 }
 
-fn detail_view(app: &App) -> Paragraph<'static> {
+fn detail_view(state: &AppState) -> Paragraph<'static> {
     let block = Block::new()
         .borders(Borders::TOP)
         .border_style(Style::new().fg(DIM))
         .title(" 詳細 ");
-    let Some(p) = app.selected() else {
+    let Some(p) = state.selected() else {
         return Paragraph::new(Span::raw("PR がない").fg(DIM)).block(block);
     };
     let mut lines = vec![
@@ -345,11 +345,11 @@ fn check_names(p: &Pr, state: CheckState) -> String {
         .join(", ")
 }
 
-fn footer_line(app: &App) -> Line<'static> {
-    if let Some(busy) = &app.busy {
+fn footer_line(state: &AppState) -> Line<'static> {
+    if let Some(busy) = &state.busy {
         return Line::from(Span::raw(format!(" {busy}")).yellow());
     }
-    if let Some((n, base)) = &app.confirm_update {
+    if let Some((n, base)) = &state.confirm_update {
         return Line::from(
             Span::raw(format!(
                 " #{n} に {base} を merge commit で取り込んで push する? (y/N)"
@@ -358,18 +358,18 @@ fn footer_line(app: &App) -> Line<'static> {
             .bold(),
         );
     }
-    if let Some((n, op)) = app.confirm_op {
+    if let Some((n, op)) = state.confirm_op {
         return Line::from(
             Span::raw(format!(
                 " #{n} を {}する? もう一度 {} で実行, 他のキーで取りやめ",
-                op.phrase(&app.local.reviewers),
+                op.phrase(&state.local.reviewers),
                 op.key()
             ))
             .yellow()
             .bold(),
         );
     }
-    if let Some(m) = &app.message {
+    if let Some(m) = &state.message {
         let span = Span::raw(format!(" {}", m.text));
         return Line::from(if m.is_error { span.red() } else { span.green() });
     }
