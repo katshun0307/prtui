@@ -1,5 +1,6 @@
+use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use anyhow::{Result, bail};
 
@@ -19,8 +20,19 @@ pub fn run(dir: &Path, program: &str, args: &[&str]) -> Result<String> {
 /// stdin に文字列を流してコマンドを実行し, 終了状態と出力をそのまま返す.
 /// 失敗時の stdout も要る呼び出し (curl の --fail-with-body) 向け
 pub fn run_with_stdin(dir: &Path, program: &str, args: &[&str], stdin: &str) -> Result<Output> {
-    let _ = (dir, program, args, stdin);
-    todo!()
+    let mut child = Command::new(program)
+        .args(args)
+        .current_dir(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    // 流すのは小さな設定だけなので, 書き終えてから出力を読んでも詰まらない.
+    // ブロックを抜けて stdin を閉じないと, 子が EOF を待ち続ける
+    if let Some(mut w) = child.stdin.take() {
+        w.write_all(stdin.as_bytes())?;
+    }
+    Ok(child.wait_with_output()?)
 }
 
 pub fn open_url(dir: &Path, url: &str) -> Result<()> {

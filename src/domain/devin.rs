@@ -1,5 +1,3 @@
-#![allow(dead_code)] // 骨組み. 実装時に外す
-
 use std::fmt;
 
 use chrono::{DateTime, Utc};
@@ -37,6 +35,22 @@ pub enum DevinStatus {
     Unknown,
 }
 
+impl DevinStatus {
+    /// 一覧や詳細に出す文字列. API の値そのもの
+    pub fn label(self) -> &'static str {
+        match self {
+            DevinStatus::New => "new",
+            DevinStatus::Claimed => "claimed",
+            DevinStatus::Running => "running",
+            DevinStatus::Exit => "exit",
+            DevinStatus::Error => "error",
+            DevinStatus::Suspended => "suspended",
+            DevinStatus::Resuming => "resuming",
+            DevinStatus::Unknown => "unknown",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DevinSession {
     /// `devin-` で始まる session ID
@@ -65,8 +79,25 @@ pub fn session_for<'a>(
     sessions: &'a [DevinSession],
     pr_url: &str,
 ) -> Option<(&'a DevinSession, usize)> {
-    let _ = (sessions, pr_url);
-    todo!()
+    let key = pr_url.trim_end_matches('/');
+    let mut hits = sessions.iter().filter(|s| {
+        s.pr_urls
+            .iter()
+            .any(|u| u.trim_end_matches('/').eq_ignore_ascii_case(key))
+    });
+    let first = hits.next()?;
+    // 同時刻なら先に出た方を残す
+    let (latest, n) = hits.fold((first, 1), |(best, n), s| {
+        (
+            if s.updated_at > best.updated_at {
+                s
+            } else {
+                best
+            },
+            n + 1,
+        )
+    });
+    Some((latest, n))
 }
 
 #[cfg(test)]
@@ -81,5 +112,60 @@ impl DevinSession {
             pr_urls: vec![pr_url.into()],
             is_archived: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(secs: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp(secs, 0).unwrap()
+    }
+
+    #[test]
+    fn session_for_picks_latest_and_counts() {
+        let url = "https://github.com/o/r/pull/1";
+        let mut a = DevinSession::fixture("devin-a", url);
+        a.updated_at = at(100);
+        let mut b = DevinSession::fixture("devin-b", "https://GitHub.com/O/R/pull/1/");
+        b.updated_at = at(300);
+        let mut c = DevinSession::fixture("devin-c", url);
+        c.updated_at = at(200);
+        let other = DevinSession::fixture("devin-d", "https://github.com/o/r/pull/12");
+        let sessions = vec![a, b, c, other];
+        let (s, n) = session_for(&sessions, url).unwrap();
+        assert_eq!((s.id.as_str(), n), ("devin-b", 3));
+        // PR 側の URL に末尾の / があっても同じ
+        let (s, n) = session_for(&sessions, "https://github.com/o/r/pull/12/").unwrap();
+        assert_eq!((s.id.as_str(), n), ("devin-d", 1));
+    }
+
+    #[test]
+    fn session_for_none_without_match() {
+        let sessions = vec![DevinSession::fixture(
+            "devin-a",
+            "https://github.com/o/r/pull/1",
+        )];
+        // 番号の前方一致では拾わない
+        assert!(session_for(&sessions, "https://github.com/o/r/pull/10").is_none());
+        assert!(session_for(&[], "https://github.com/o/r/pull/1").is_none());
+    }
+
+    #[test]
+    fn session_with_several_prs() {
+        let mut s = DevinSession::fixture("devin-a", "https://github.com/o/r/pull/1");
+        s.pr_urls.push("https://github.com/o/r/pull/2".into());
+        let sessions = vec![s];
+        let (_, n) = session_for(&sessions, "https://github.com/o/r/pull/2").unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn status_from_json() {
+        let st = |s: &str| serde_json::from_str::<DevinStatus>(s).unwrap();
+        assert_eq!(st(r#""suspended""#), DevinStatus::Suspended);
+        assert_eq!(st(r#""blocked""#), DevinStatus::Unknown);
+        assert_eq!(DevinStatus::Resuming.label(), "resuming");
     }
 }
