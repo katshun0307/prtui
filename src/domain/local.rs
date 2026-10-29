@@ -54,4 +54,9 @@ mod tests {
         );
         assert!(parse_reviewers("").is_empty());
     }
+
+    #[test]
+    fn reviewers_from_whitespace() {
+        assert_eq!(parse_reviewers("  a\tb  c ,, d "), vec!["a", "b", "c", "d"]);
+    }
 }

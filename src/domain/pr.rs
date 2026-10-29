@@ -116,3 +116,22 @@ impl Pr {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Pr;
+
+    #[test]
+    fn conflicting_only_when_mergeable_is_conflicting() {
+        let mut p = Pr::fixture(1, "a", "main");
+        for (m, want) in [
+            ("CONFLICTING", true),
+            ("MERGEABLE", false),
+            ("UNKNOWN", false),
+            ("", false),
+        ] {
+            p.mergeable = m.into();
+            assert_eq!(p.is_conflicting(), want, "{m}");
+        }
+    }
+}

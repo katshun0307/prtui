@@ -135,4 +135,29 @@ mod tests {
         let prs = vec![Pr::fixture(1, "a", "b"), Pr::fixture(2, "b", "a")];
         assert_eq!(layout(prs).len(), 2);
     }
+
+    #[test]
+    fn arrange_sorts_by_updated_desc_and_resets_stack() {
+        use super::arrange;
+        use crate::domain::pr::Stack;
+        use chrono::{TimeZone, Utc};
+
+        let at = |n: u64, head: &str, base: &str, day: u32| {
+            let mut p = Pr::fixture(n, head, base);
+            p.updated_at = Utc.with_ymd_and_hms(2026, 1, day, 0, 0, 0).unwrap();
+            // 前回の stack が残っていても付け直される
+            p.stack = Some(Stack { pos: 9, len: 9 });
+            p
+        };
+        let prs = vec![
+            at(1, "a", "main", 1),
+            at(2, "x", "main", 3),
+            at(3, "y", "main", 2),
+        ];
+        let got: Vec<_> = arrange(prs)
+            .into_iter()
+            .map(|p| (p.number, p.stack))
+            .collect();
+        assert_eq!(got, vec![(2, None), (3, None), (1, None)]);
+    }
 }
