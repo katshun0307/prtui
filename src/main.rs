@@ -71,9 +71,7 @@ fn run(mut terminal: DefaultTerminal, mut app: App) -> Result<()> {
             }
         }
 
-        while let Ok(ev) = app.rx.try_recv() {
-            app.handle_event(ev);
-        }
+        app.pump();
         if app
             .state
             .last_fetch
