@@ -184,9 +184,9 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
             chat.fetching = false;
             match res {
                 Ok(messages) => {
+                    // 送信失敗のエラーを次のポーリングで消さない. 消すのは送信と r, i, e
                     chat.messages = messages;
                     chat.loaded = true;
-                    chat.error = None;
                 }
                 Err(e) => chat.error = Some(format!("メッセージの取得失敗: {e}")),
             }
@@ -330,7 +330,7 @@ fn open_chat(state: &mut AppState) -> Vec<Effect> {
         return vec![];
     };
     state.message = None;
-    state.chat = Some(ChatView::new(id));
+    state.chat = Some(ChatView::new(id, n));
     vec![]
 }
 
@@ -365,8 +365,12 @@ fn chat_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('k') | KeyCode::Up => scroll_by(chat, -1),
         KeyCode::Char('g') => chat.scroll = Some(0),
         KeyCode::Char('G') => chat.scroll = None,
-        KeyCode::Char('i') => chat.typing = true,
+        KeyCode::Char('i') => {
+            chat.typing = true;
+            chat.error = None;
+        }
         KeyCode::Char('e') if !chat.sending => {
+            chat.error = None;
             return vec![Effect::Compose {
                 draft: chat.draft.clone(),
             }];
@@ -375,7 +379,10 @@ fn chat_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
             Some(url) => return vec![Effect::OpenUrl(url)],
             None => chat.error = Some(format!("{} が session 一覧に無い", chat.session_id)),
         },
-        KeyCode::Char('r') => chat.last_poll = None,
+        KeyCode::Char('r') => {
+            chat.last_poll = None;
+            chat.error = None;
+        }
         KeyCode::Esc | KeyCode::Char('q') if !chat.sending => state.chat = None,
         _ => {}
     }
@@ -396,6 +403,8 @@ fn send(chat: &mut ChatView) -> Vec<Effect> {
         return vec![];
     }
     let text = text.to_string();
+    // 送信中に打った文字が, 成功時の draft.clear() で送らずに消えないよう入力を抜ける
+    chat.typing = false;
     chat.sending = true;
     chat.error = None;
     vec![Effect::SendMessage {
@@ -825,7 +834,7 @@ mod tests {
             "devin-a",
             "https://github.com/o/r/pull/1",
         )];
-        s.chat = Some(ChatView::new("devin-a".into()));
+        s.chat = Some(ChatView::new("devin-a".into(), 1));
         s
     }
 
@@ -1103,6 +1112,31 @@ mod tests {
         assert!(!c.sending);
         assert_eq!(c.draft, "hi");
         assert_eq!(c.error.as_deref(), Some("送信失敗: 409 conflict"));
+
+        // 次のポーリングが成功しても送信失敗は消さない. i で消す
+        handle_event(&mut s, Event::DevinMessages("devin-a".into(), Ok(vec![])));
+        assert_eq!(chat(&s).error.as_deref(), Some("送信失敗: 409 conflict"));
+        handle_key(&mut s, key('i'));
+        assert!(chat(&s).error.is_none());
+    }
+
+    #[test]
+    fn typing_after_enter_does_not_touch_sent_draft() {
+        let mut s = chat_state();
+        handle_key(&mut s, key('i'));
+        handle_key(&mut s, key('h'));
+        let effects = handle_key(&mut s, code(KeyCode::Enter));
+        assert_eq!(
+            effects,
+            vec![Effect::SendMessage {
+                session_id: "devin-a".into(),
+                text: "h".into(),
+            }]
+        );
+        assert!(!chat(&s).typing);
+        // 送信中は入力を抜けているので文字は draft に入らない
+        handle_key(&mut s, key('x'));
+        assert_eq!(chat(&s).draft, "h");
     }
 
     #[test]

@@ -15,8 +15,8 @@ pub(super) fn draw_chat(f: &mut Frame, state: &mut AppState) {
     let Some(chat) = &state.chat else {
         return;
     };
-    // v は選択中の PR から開くので, 開いている間の選択はその PR のまま
-    let header = header_line(state.selected(), state.chat_session(), &chat.session_id);
+    let pr = state.pr(chat.number);
+    let header = header_line(chat.number, pr, state.chat_session(), &chat.session_id);
     render_chat(f, f.area(), header, state);
 }
 
@@ -42,7 +42,7 @@ fn render_chat(f: &mut Frame, area: Rect, header: Line<'static>, state: &mut App
     chat.max_scroll = total.saturating_sub(body.height as usize);
     chat.viewport_height = body.height;
     let offset = chat.scroll.unwrap_or(chat.max_scroll).min(chat.max_scroll);
-    f.render_widget(para.scroll((offset as u16, 0)), body);
+    f.render_widget(para.scroll((offset.min(u16::MAX as usize) as u16, 0)), body);
 
     if let Some(input) = input {
         f.render_widget(input, input_area);
@@ -54,10 +54,18 @@ fn render_chat(f: &mut Frame, area: Rect, header: Line<'static>, state: &mut App
 }
 
 /// ` Devin #<PR番号> <title> [status]`. session が一覧から消えていれば status の代わりに id を出す
-fn header_line(pr: Option<&Pr>, session: Option<&DevinSession>, session_id: &str) -> Line<'static> {
-    let mut spans = vec![Span::raw(" Devin ").magenta().bold()];
+fn header_line(
+    number: u64,
+    pr: Option<&Pr>,
+    session: Option<&DevinSession>,
+    session_id: &str,
+) -> Line<'static> {
+    let mut spans = vec![
+        Span::raw(" Devin ").magenta().bold(),
+        Span::raw(format!("#{number} ")).bold(),
+    ];
+    // PR が一覧から消えていれば (close, merge) 番号だけ出す
     if let Some(p) = pr {
-        spans.push(Span::raw(format!("#{} ", p.number)).bold());
         spans.push(Span::raw(format!("{} ", p.title)));
     }
     match session {
@@ -292,11 +300,14 @@ mod tests {
             status: DevinStatus::Error,
             ..DevinSession::fixture("devin-1", "")
         };
-        let line = header_line(Some(&p), Some(&s), "devin-1");
+        let line = header_line(12, Some(&p), Some(&s), "devin-1");
         assert_eq!(line.to_string(), " Devin #12 直す [error]");
         assert_eq!(line.spans.last().unwrap().style.fg, Some(Color::Red));
-        let line = header_line(Some(&p), None, "devin-1");
+        let line = header_line(12, Some(&p), None, "devin-1");
         assert_eq!(line.to_string(), " Devin #12 直す [devin-1]");
+        // PR が一覧から消えても番号は出す
+        let line = header_line(12, None, Some(&s), "devin-1");
+        assert_eq!(line.to_string(), " Devin #12 [error]");
     }
 
     fn five_messages() -> Vec<DevinMessage> {

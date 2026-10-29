@@ -19,6 +19,8 @@ pub struct Message {
 #[derive(Debug, Default)]
 pub struct ChatView {
     pub session_id: String,
+    /// 開いたときの PR 番号. 一覧の選択は PR が消えるとずれるので持っておく
+    pub number: u64,
     pub messages: Vec<DevinMessage>,
     /// 1 度でもメッセージを取得できた
     pub loaded: bool,
@@ -42,9 +44,10 @@ pub struct ChatView {
 }
 
 impl ChatView {
-    pub fn new(session_id: String) -> Self {
+    pub fn new(session_id: String, number: u64) -> Self {
         Self {
             session_id,
+            number,
             ..Default::default()
         }
     }

@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -81,7 +79,7 @@ fn session_url(cfg: &DevinConfig, id: &str) -> String {
 fn request(cfg: &DevinConfig, method: &str, url: &str, body: Option<&str>) -> Result<String> {
     let args = curl_args(method, url, body);
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let out = run_with_stdin(Path::new("."), "curl", &args, &auth_config(cfg))?;
+    let out = run_with_stdin(&std::env::temp_dir(), "curl", &args, &auth_config(cfg))?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     if out.status.success() {

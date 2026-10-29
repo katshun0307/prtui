@@ -20,6 +20,14 @@
 - Linear review を開く: `L` キー. review の URL (`https://linear.app/<workspace>/review/<タイトル>-<slugId>`) の slugId は Linear 側の ID で, GitHub の情報からは組み立てられない. Linear の公開 GraphQL API にも GitHub の PR 番号から引くクエリが無い (`diff(id:)` は internal で Linear の ID が要る). そこで Linear の bot (linear-code) が PR に付けるコメントから取る. `gh api --paginate repos/{repo}/issues/{n}/comments` を UI とは別スレッドで呼び, `<!-- linear-review-link -->` の直後の `href` を `?openGuide=true` などの query を外して `open` する. 同じコメントには issue 本文の引用があり, そこに関連する別 PR の review URL が並ぶので, 目印より前は見ない. bot のコメントが無い PR (例: issue に紐付いていない PR) では `#<n> に Linear review のリンクが無い` を出す
 - キャッシュ: 全件取得に成功するたびに一覧を `$XDG_CACHE_HOME/prtui/<owner>__<name>.json` (未設定なら `~/.cache`) に書く. 起動時はこれを読んで即表示し, 裏で取り直す. ヘッダに `取得 Xm 前` を出し, 取り直しが終わるまで `(キャッシュ)` を付ける. `Pr` の形が変わって読めないキャッシュは捨てる. `--dump` はキャッシュを使わない
 - 操作後の更新: `u`, `O`, `DD`, `XX`, `RR` の後は全件を取り直さず, その PR だけを `fetch_pr` (`repository.pullRequest` に同じ fragment) で取り直して差し替える. 止める条件は `WatchUntil` (`app/event.rs`) のデータで表す. 反映を待つため 2 秒おきに最大 10 回取り直す. 止める条件は, `u` なら head oid が変わる, open / draft なら `isDraft` が変わる, close なら open でなくなる (一覧から消す). 待っている間は一覧のタイトルに `#n を同期中…` を出す. 差し替え後は `arrange` で並びと stack をまとめ直し, 選択中の PR は番号で追う
+- Devin session: PR に紐づく Devin session のやり取りを読み, メッセージを送る (2026-10-29 追加. 仕様はユーザーと質疑で決めた).
+  - 設定は git config `prtui.devin-token` と `prtui.devin-org` (`org-...`). token は個人, org は組織ごとなので置き場所 (global / repo) は自由にした. 未設定なら Devin 列は空で, `v` で設定を促すエラーを出す
+  - session の特定: Devin API v3 の session 一覧 (`GET /v3/organizations/{org}/sessions`) に PR で絞る引数が無い. そこで `repo_names=<owner/name>` と `updated_after=30 日前` で取り (200 件 × 最大 5 ページ), 各 session の `pull_requests[].pr_url` を PR の URL と照合する (末尾 `/` と大文字小文字は無視). PR 本文の Devin のリンクから取る案は, 人が作った PR に後から Devin を入れた場合に拾えないので採らなかった. 1 つの PR に複数あれば `updated_at` が最新の 1 つを使う. 他人の session でも PR が一致すれば出す
+  - 取得は PR の全件取得のたび (起動時, 5 分ごと, `r`) に別スレッドで行う. PR の取得 (`loading`) とは独立 (`sessions_loading`) で, 失敗しても一覧は出す. キャッシュにも入れる
+  - 一覧の Devin 列と詳細欄の `devin:` 行に status を出す. new / claimed / running / resuming は yellow, suspended は cyan, exit と archived は DIM, error は red. 複数なら `×n`
+  - 会話ビュー (`v`): 全画面でメッセージを古い順に並べる (Devin は magenta, 自分側は cyan). 開いている間は 5 秒おきに取り直し, 末尾を見ていれば追従する. `j`/`k`, `Ctrl-d`/`Ctrl-u`, `g`/`G` でスクロール. `i` で 1 行入力 (Enter 送信, Esc でやめる), `e` で TUI を止めて `${VISUAL:-${EDITOR:-vi}}` を開き, 0 で終われば送信する (非 0 は取りやめ). `o` で session を Devin の web で開く. `r` ですぐ取り直す. `Esc`/`q` で一覧に戻る (送信中は無視)
+  - 送信は status で制限しない (suspended は送信で再開する). API のエラー (409 / 410 など) は会話ビューのフッターに出す. 書きかけは送信が成功するまで残し, 失敗後に `i` か `e` で直せる
+  - HTTP は crate を足さず `curl` を呼ぶ. token は argv に載せず `curl --config -` で stdin から渡す (`ps` に出さないため)
 - 実装: Rust (edition 2024), ratatui 0.30 (crossterm は `ratatui::crossterm` の re-export を使う), serde, anyhow, chrono. GitHub と git は `gh` と `git` コマンドを `std::process::Command` で呼ぶ. 非同期 runtime は使わず, 時間のかかる処理はスレッド + mpsc で UI をブロックしない
 
 ## 構成
@@ -30,17 +38,18 @@
 |---|---|
 | `src/main.rs` | 引数処理 (`-C`, `--dump`), 端末初期化, イベントループ, 外部コマンド実行時の TUI 一時停止 |
 | `src/dump.rs` | `--dump` のテキスト出力 |
-| `src/domain/` | 純粋な型と関数. `pr.rs` (`Pr`), `stack.rs` (`arrange`, `group_stacks`), `review.rs` (`review_targets`), `linear.rs` (issue キーと review URL の抽出), `local.rs` (`LocalState`, `parse_reviewers`), `op.rs` (`PrOp`) |
+| `src/domain/` | 純粋な型と関数. `pr.rs` (`Pr`), `stack.rs` (`arrange`, `group_stacks`), `review.rs` (`review_targets`), `linear.rs` (issue キーと review URL の抽出), `local.rs` (`LocalState`, `parse_reviewers`), `op.rs` (`PrOp`), `devin.rs` (Devin の型と `session_for`) |
 | `src/infra/process.rs` | コマンド実行ヘルパ `run`, `open_url` |
 | `src/infra/git.rs` | メイン worktree の解決 `main_worktree`, `read_local_state` (現在ブランチ, dirty, refs/heads の oid, git config) |
 | `src/infra/gh.rs` | gh コマンド. 全件取得 `fetch_prs` と 1 件取得 `fetch_pr`, `update_branch`, `checkout`, `change_state`, `view_web`, `linear_review_url` |
 | `src/infra/graphql.rs` | GraphQL クエリ, `Raw*` 型と `Pr` への変換, JSON の解析 `parse_search` / `parse_one` |
-| `src/infra/cache.rs` | PR 一覧のディスクキャッシュの読み書き |
-| `src/app/state.rs` | 全状態 `AppState` |
+| `src/infra/devin.rs` | Devin API v3 (`fetch_sessions`, `fetch_messages`, `send_message`) を curl で呼ぶ. JSON の解析 `parse_*` |
+| `src/infra/cache.rs` | PR 一覧と Devin session 一覧のディスクキャッシュの読み書き |
+| `src/app/state.rs` | 全状態 `AppState` と会話ビューの `ChatView` |
 | `src/app/event.rs` | `Event` (スレッドの結果), `Effect` (副作用の要求), `Action` (main への指示), `WatchUntil` |
-| `src/app/update.rs` | キー操作とイベント処理. `AppState` を更新して `Vec<Effect>` を返す純粋関数 |
+| `src/app/update.rs` | キー操作, イベント処理, 時間の遷移 (`tick`). `AppState` を更新して `Vec<Effect>` を返す純粋関数 |
 | `src/app/runtime.rs` | `App`. Effect を実行し, スレッドの起動と infra の呼び出しをここに閉じる |
-| `src/ui/` | 描画. `mod.rs` (ヘッダ, フッタ, 配色), `table.rs` (一覧), `detail.rs` (詳細欄), `format.rs` |
+| `src/ui/` | 描画. `mod.rs` (ヘッダ, フッタ, 配色), `table.rs` (一覧), `detail.rs` (詳細欄), `chat.rs` (会話ビュー), `format.rs` |
 
 ### レイヤー化した理由
 
@@ -57,6 +66,7 @@ refactor 前は 1 つの `App` に状態, キー判断, スレッド起動, gh �
 - Review: `reviewDecision`. GitHub がブランチ保護ルールから計算する値なので, 必須レビューのルールが無い repo (検証用 repo など) では常に `-` になる
 - Reviewer: 承認 ✓n (green), 変更要求 ✗n (red), 依頼中 ●n (yellow) の人数. `reviewRequests` (依頼中) と `latestReviews` (各人の最新レビュー) から作る. 承認後に再依頼された人は依頼中として数える. author 自身, DISMISSED, PENDING は除く. コメントのみの人 (devin などの bot を含む) は数えない. 数える人が居なければ「未設定」で, Draft なら DIM, それ以外は yellow. 詳細欄の `reviewers:` 行に名前と状態を全員分出す. Review 列が `-` の repo でも誰に頼んでいて誰が承認したかが分かるように足した
 - Local: ローカルの同名ブランチの oid が PR の head と一致すれば「最新」, 違えば「差分あり」. 現在のブランチに ● を付ける
+- Devin: PR に紐づく最新の Devin session の status. 複数なら `×n`. Devin を設定していなければ空
 
 ## 確認済み
 
@@ -77,8 +87,22 @@ refactor 前は 1 つの `App` に状態, キー判断, スレッド起動, gh �
 - 2026-10-29: `RR` (review 依頼) を追加. clippy 0 件, fmt 通過, `cargo test` 通過
 - 2026-10-29: `RR` 後に Reviewer 列が変わらない不具合を直した. 原因は login の大文字小文字. 依頼相手を git config `prtui.reviewers` に移した
 - 2026-10-29: レイヤー構成に refactor した. clippy 0 件, fmt 通過, `cargo test` 43 件通過. `--dump` の出力と tmux の画面が refactor 前と一致することを確認
+- 2026-10-29: Devin session 連携を追加. fable に設計を相談して層ごとの契約を骨組みとして先に書き, domain+infra, app+main, ui+dump を 3 つの opus subagent に worktree で並行実装させて merge した. clippy 0 件, fmt 通過, `cargo test` 88 件通過. Devin 未設定の 検証用 repo で tmux 表示 (Devin 列が空) と `v` の設定エラーを確認. 偽の token で curl を叩き 403 の ProblemDetail がエラーになることを確認
+- 2026-10-29: merge 後に fable に統合レビューを頼み, 次の 5 点を直した. `cargo test` 89 件通過
+  - キャッシュの session を起動時に復元していなかった
+  - config が消えると `sessions_loading` が立ったまま戻らなかった
+  - 送信失敗のエラーが次のポーリングで消えていた
+  - 送信中に打った文字が成功時に消えていた
+  - 会話ビューのヘッダが選択中の PR を引いていて, PR が一覧から消えるとずれた. `ChatView` に PR 番号を持たせた
 
 ## 未確認
+
+- Devin API を正しい token で叩くこと全般. 特に次の 4 点
+  - 時刻の単位 (秒と仮定し, 1e12 を超えれば ms とみなしている)
+  - `repo_names` が 1 値の query で効くか
+  - POST messages が SessionResponse を返すか
+  - `pull_requests[].pr_url` が GitHub の PR URL と同じ形か
+- 会話ビューの実画面 (スクロール, 入力, エディタからの復帰と一時ファイルの削除)
 
 
 - 操作後の `#n を同期中…` からの差し替え (実際の `u`, `O`, `DD`, `XX` を実行していないため)
@@ -96,3 +120,5 @@ refactor 前は 1 つの `App` に状態, キー判断, スレッド起動, gh �
 - `o` (`gh pr view --web`) は UI スレッドで同期実行している
 - stacked PR の main 列は main との差なので, 親の変更を取り込めているかは分からない
 - PR が 100 件を超えると search の `first:100` で切れる
+- Devin session は直近 30 日に更新されたもので, 最大 1000 件しか見ない. それより古い session の PR は Devin 列が空になる
+- 詳細欄は高さ 10 で固定. CI の失敗と実行中の行と devin 行が全部出ると URL の行が欄からはみ出ることがある

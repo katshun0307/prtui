@@ -42,9 +42,12 @@ impl App {
         let cached = cache::load(&repo);
         let local = read_local_state(&dir).unwrap_or_default();
         let mut state = AppState::new(dir, repo, local);
-        state.fetched_at = cached.as_ref().map(|c| c.fetched_at);
-        state.from_cache = cached.is_some();
-        state.prs = cached.map(|c| c.prs).unwrap_or_default();
+        if let Some(c) = cached {
+            state.fetched_at = Some(c.fetched_at);
+            state.from_cache = true;
+            state.prs = c.prs;
+            state.devin_sessions = c.devin_sessions;
+        }
         let mut app = Self {
             state,
             tx,
@@ -149,13 +152,12 @@ impl App {
                     }
                 }
                 Effect::FetchSessions => {
-                    // update は config があるときだけ出す
-                    if let Some(cfg) = self.state.local.devin.clone() {
-                        self.spawn(move |_, repo| {
-                            let since = Utc::now() - chrono::Duration::days(SESSIONS_SINCE_DAYS);
-                            Event::DevinSessions(fetch_sessions(&cfg, repo, since))
-                        });
-                    }
+                    let cfg = self.state.local.devin.clone();
+                    self.spawn(move |_, repo| {
+                        let since = Utc::now() - chrono::Duration::days(SESSIONS_SINCE_DAYS);
+                        let res = with_devin(cfg.as_ref(), |c| fetch_sessions(c, repo, since));
+                        Event::DevinSessions(res)
+                    });
                 }
                 Effect::FetchMessages(id) => {
                     let cfg = self.state.local.devin.clone();
