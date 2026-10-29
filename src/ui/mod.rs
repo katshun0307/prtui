@@ -1,9 +1,10 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Stylize};
+use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 
 use crate::app::AppState;
+use crate::domain::devin::{DevinSession, DevinStatus};
 
 mod chat;
 mod detail;
@@ -24,11 +25,32 @@ use table::draw_table;
 /// - magenta: ローカルとリモートに差分, 絞り込み中
 /// - DIM: 補助情報, 0 件, Draft
 ///
+/// Devin 列と会話ビュー
+/// - status: 動いている (new / claimed / running / resuming) は yellow, 返事待ちの suspended は cyan,
+///   error は red, 終わった exit と unknown は DIM. archived の session は status によらず DIM
+/// - 発言者: Devin は magenta bold, 自分側 (user) は cyan bold. 時刻は DIM
+///
 /// `Color::DarkGray` は端末テーマによって背景色と同化するので使わない.
 /// 256 色の固定値を使い, 選択行の背景とも区別が付くようにする.
 pub(super) const DIM: Color = Color::Indexed(245);
 pub(super) const SELECTED_BG: Color = Color::Indexed(237);
 pub(super) const HEADER_FG: Color = Color::Indexed(250);
+
+/// Devin session の status の色. 一覧, 詳細欄, 会話ビューのヘッダで共通
+pub(super) fn devin_style(s: &DevinSession) -> Style {
+    if s.is_archived {
+        return Style::new().fg(DIM);
+    }
+    let fg = match s.status {
+        DevinStatus::New | DevinStatus::Claimed | DevinStatus::Running | DevinStatus::Resuming => {
+            Color::Yellow
+        }
+        DevinStatus::Suspended => Color::Cyan,
+        DevinStatus::Error => Color::Red,
+        DevinStatus::Exit | DevinStatus::Unknown => DIM,
+    };
+    Style::new().fg(fg)
+}
 
 pub fn draw(f: &mut Frame, state: &mut AppState) {
     if state.chat.is_some() {
@@ -100,7 +122,7 @@ fn footer_line(state: &AppState) -> Line<'static> {
         let span = Span::raw(format!(" {}", m.text));
         return Line::from(if m.is_error { span.red() } else { span.green() });
     }
-    const KEYS: [(&str, &str); 14] = [
+    const KEYS: [(&str, &str); 15] = [
         ("j/k", "移動"),
         ("Enter/c", "checkout"),
         ("u", "main 取込"),
@@ -112,6 +134,7 @@ fn footer_line(state: &AppState) -> Line<'static> {
         ("o", "ブラウザ"),
         ("l", "Linear"),
         ("L", "Linear review"),
+        ("v", "Devin"),
         ("t", "Draft のみ"),
         ("r", "更新"),
         ("q", "終了"),
@@ -122,4 +145,36 @@ fn footer_line(state: &AppState) -> Line<'static> {
         spans.push(Span::raw(format!(" {label}  ")).fg(DIM));
     }
     Line::from(spans)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(status: DevinStatus, is_archived: bool) -> DevinSession {
+        DevinSession {
+            status,
+            is_archived,
+            ..DevinSession::fixture("devin-1", "https://github.com/o/r/pull/1")
+        }
+    }
+
+    #[test]
+    fn devin_style_by_status() {
+        let fg = |status| devin_style(&session(status, false)).fg;
+        assert_eq!(fg(DevinStatus::New), Some(Color::Yellow));
+        assert_eq!(fg(DevinStatus::Claimed), Some(Color::Yellow));
+        assert_eq!(fg(DevinStatus::Running), Some(Color::Yellow));
+        assert_eq!(fg(DevinStatus::Resuming), Some(Color::Yellow));
+        assert_eq!(fg(DevinStatus::Suspended), Some(Color::Cyan));
+        assert_eq!(fg(DevinStatus::Error), Some(Color::Red));
+        assert_eq!(fg(DevinStatus::Exit), Some(DIM));
+        assert_eq!(fg(DevinStatus::Unknown), Some(DIM));
+    }
+
+    #[test]
+    fn archived_is_dim() {
+        let s = session(DevinStatus::Error, true);
+        assert_eq!(devin_style(&s).fg, Some(DIM));
+    }
 }

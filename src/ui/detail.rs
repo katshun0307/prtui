@@ -2,8 +2,10 @@ use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
-use super::DIM;
+use super::format::status_label;
+use super::{DIM, devin_style};
 use crate::app::AppState;
+use crate::domain::devin::DevinSession;
 use crate::domain::pr::{CheckState, Pr, ReviewerState};
 
 pub(super) fn detail_view(state: &AppState) -> Paragraph<'static> {
@@ -55,8 +57,21 @@ pub(super) fn detail_view(state: &AppState) -> Paragraph<'static> {
             Span::raw(pending),
         ]));
     }
+    if let Some((s, _)) = state.devin_for(p) {
+        lines.push(devin_line(s));
+    }
     lines.push(Line::from(Span::raw(p.url.clone()).fg(DIM).underlined()));
     Paragraph::new(lines).block(block).wrap(Wrap { trim: true })
+}
+
+/// `devin: <status> <url>`. status は一覧の Devin 列と同じ色
+fn devin_line(s: &DevinSession) -> Line<'static> {
+    Line::from(vec![
+        Span::raw("devin: ").fg(DIM),
+        Span::styled(status_label(s.status), devin_style(s)),
+        Span::raw(" "),
+        Span::raw(s.url.clone()).fg(DIM).underlined(),
+    ])
 }
 
 fn check_names(p: &Pr, state: CheckState) -> String {
@@ -87,4 +102,21 @@ fn reviewer_spans(p: &Pr) -> Vec<Span<'static>> {
         });
     }
     spans
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::style::Color;
+
+    #[test]
+    fn devin_line_shows_status_and_url() {
+        let s = DevinSession::fixture("devin-1", "https://github.com/o/r/pull/1");
+        let line = devin_line(&s);
+        assert_eq!(
+            line.to_string(),
+            "devin: running https://app.devin.ai/sessions/devin-1"
+        );
+        assert_eq!(line.spans[1].style.fg, Some(Color::Yellow));
+    }
 }
