@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
+use crate::domain::devin::DevinConfig;
 use crate::domain::local::{LocalState, parse_reviewers};
 use crate::infra::process::run;
 
@@ -40,9 +41,12 @@ pub fn read_local_state(dir: &Path) -> Result<LocalState> {
         .map(|(n, o)| (n.to_string(), o.to_string()))
         .collect();
     // 未設定だと git config は非 0 で終わるので, 失敗は None として扱う
-    let linear_workspace = run(dir, "git", &["config", "--get", "prtui.linear-workspace"])
-        .ok()
-        .filter(|s| !s.is_empty());
+    let config = |key: &str| {
+        run(dir, "git", &["config", "--get", key])
+            .ok()
+            .filter(|s| !s.is_empty())
+    };
+    let linear_workspace = config("prtui.linear-workspace");
     let reviewers = run(dir, "git", &["config", "--get-all", "prtui.reviewers"])
         .map(|s| parse_reviewers(&s))
         .unwrap_or_default();
@@ -52,6 +56,8 @@ pub fn read_local_state(dir: &Path) -> Result<LocalState> {
         branches,
         linear_workspace,
         reviewers,
-        devin: None, // TODO(A): git config から読む
+        devin: config("prtui.devin-token")
+            .zip(config("prtui.devin-org"))
+            .map(|(token, org)| DevinConfig { token, org }),
     })
 }
