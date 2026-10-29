@@ -1,6 +1,8 @@
 //! update が返した Effect を実行する. スレッドの起動と infra の呼び出しはここに閉じる.
 
+use std::io;
 use std::path::{Path, PathBuf};
+use std::process::ExitStatus;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 use std::time::Duration;
@@ -50,6 +52,17 @@ impl App {
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
         let effects = update::handle_key(&mut self.state, key);
         self.perform(effects)
+    }
+
+    /// 時間で起きる遷移を進める. main のループから毎回呼ぶ
+    pub fn tick(&mut self) {
+        todo!()
+    }
+
+    /// `Action::Suspend` の外部コマンドが終わった後に main が呼ぶ
+    pub fn resumed(&mut self, status: io::Result<ExitStatus>) {
+        let _ = status;
+        todo!()
     }
 
     /// スレッドから届いた結果をすべて反映する
@@ -104,6 +117,10 @@ impl App {
                         self.state.error(e.to_string());
                     }
                 }
+                Effect::FetchSessions => todo!(),
+                Effect::FetchMessages(_) => todo!(),
+                Effect::SendMessage { .. } => todo!(),
+                Effect::Compose { .. } => todo!(),
             }
         }
         action
@@ -149,6 +166,7 @@ impl App {
         let cache = Cache {
             fetched_at: self.state.fetched_at.unwrap_or_else(Utc::now),
             prs: self.state.prs.clone(),
+            devin_sessions: self.state.devin_sessions.clone(),
         };
         if let Err(e) = cache::save(&self.state.repo, &cache) {
             self.state.error(format!("キャッシュの保存失敗: {e}"));

@@ -5,6 +5,7 @@ use std::time::Instant;
 use chrono::{DateTime, Utc};
 use ratatui::widgets::TableState;
 
+use crate::domain::devin::{DevinMessage, DevinSession};
 use crate::domain::local::LocalState;
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
@@ -12,6 +13,32 @@ use crate::domain::pr::Pr;
 pub struct Message {
     pub text: String,
     pub is_error: bool,
+}
+
+/// Devin session との会話ビュー. session 本体は `AppState::devin_sessions` から引く
+#[derive(Debug, Default)]
+pub struct ChatView {
+    pub session_id: String,
+    pub messages: Vec<DevinMessage>,
+    /// 1 度でもメッセージを取得できた
+    pub loaded: bool,
+    /// メッセージを取得中. ポーリングを 1 本に絞る
+    pub fetching: bool,
+    /// 最後にメッセージの取得を出した時刻. None なら次の tick で取る
+    pub last_poll: Option<Instant>,
+    /// 先頭からの表示位置. None なら末尾に追従する
+    pub scroll: Option<usize>,
+    /// 描画が書く. 末尾を表示するときの scroll
+    pub max_scroll: usize,
+    /// 描画が書く. メッセージ欄の高さ
+    pub viewport_height: u16,
+    /// 1 行入力中
+    pub typing: bool,
+    /// 書きかけのメッセージ. 送信が成功するまで消さない
+    pub draft: String,
+    pub sending: bool,
+    /// 会話ビューのフッターに出すエラー
+    pub error: Option<String>,
 }
 
 pub struct AppState {
@@ -35,6 +62,12 @@ pub struct AppState {
     pub from_cache: bool,
     /// 操作の反映を待って取り直している PR 番号
     pub syncing: HashSet<u64>,
+    /// repo の Devin session. Devin を設定していなければ空
+    pub devin_sessions: Vec<DevinSession>,
+    /// Devin session 一覧を取得中. PR の取得 (`loading`) とは独立
+    pub sessions_loading: bool,
+    /// 会話ビューを開いていれば Some
+    pub chat: Option<ChatView>,
 }
 
 impl AppState {
@@ -55,6 +88,9 @@ impl AppState {
             fetched_at: None,
             from_cache: false,
             syncing: HashSet::new(),
+            devin_sessions: Vec::new(),
+            sessions_loading: false,
+            chat: None,
         }
     }
 
@@ -72,6 +108,17 @@ impl AppState {
 
     pub fn pr(&self, n: u64) -> Option<&Pr> {
         self.prs.iter().find(|p| p.number == n)
+    }
+
+    /// 会話ビューで開いている session
+    pub fn chat_session(&self) -> Option<&DevinSession> {
+        todo!()
+    }
+
+    /// PR に紐づく最新の Devin session と件数
+    pub fn devin_for(&self, pr: &Pr) -> Option<(&DevinSession, usize)> {
+        let _ = pr;
+        todo!()
     }
 
     /// 一覧を差し替える. 並びが変わっても同じ PR を選んだままにする

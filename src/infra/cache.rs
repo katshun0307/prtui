@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::domain::devin::DevinSession;
 use crate::domain::pr::Pr;
 
 /// 前回取得した PR 一覧. 起動直後にこれを出し, 裏で取り直す
@@ -12,6 +13,9 @@ use crate::domain::pr::Pr;
 pub struct Cache {
     pub fetched_at: DateTime<Utc>,
     pub prs: Vec<Pr>,
+    /// 前回取得した Devin session. Devin を設定していなければ空
+    #[serde(default)]
+    pub devin_sessions: Vec<DevinSession>,
 }
 
 /// `$XDG_CACHE_HOME/prtui/<owner>__<name>.json`. XDG_CACHE_HOME が無ければ `~/.cache`.

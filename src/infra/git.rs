@@ -52,5 +52,6 @@ pub fn read_local_state(dir: &Path) -> Result<LocalState> {
         branches,
         linear_workspace,
         reviewers,
+        devin: None, // TODO(A): git config から読む
     })
 }

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::domain::devin::DevinConfig;
 use crate::domain::pr::Pr;
 
 #[derive(Debug, Default, Clone)]
@@ -13,6 +14,8 @@ pub struct LocalState {
     /// git config `prtui.reviewers` の値. `RR` で review を依頼する相手の login.
     /// カンマか空白で区切って並べるか, `--add` で 1 人ずつ足す
     pub reviewers: Vec<String>,
+    /// git config `prtui.devin-token` と `prtui.devin-org`. どちらかが未設定なら None
+    pub devin: Option<DevinConfig>,
 }
 
 impl LocalState {

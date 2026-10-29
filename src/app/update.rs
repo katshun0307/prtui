@@ -24,6 +24,12 @@ pub fn refresh(state: &mut AppState) -> Vec<Effect> {
     vec![Effect::Fetch]
 }
 
+/// 時間で起きる遷移. main のループから毎回呼ぶ
+pub fn tick(state: &mut AppState, now: Instant) -> Vec<Effect> {
+    let _ = (state, now);
+    todo!()
+}
+
 pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
     match ev {
         Event::Fetched(res) => {
@@ -128,6 +134,10 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
             }
             vec![Effect::ReloadLocal]
         }
+        Event::DevinSessions(_)
+        | Event::DevinMessages(..)
+        | Event::DevinSent(..)
+        | Event::Composed(_) => todo!(),
     }
 }
 

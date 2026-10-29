@@ -5,10 +5,12 @@ use ratatui::text::{Line, Span};
 
 use crate::app::AppState;
 
+mod chat;
 mod detail;
 pub mod format;
 mod table;
 
+use chat::draw_chat;
 use detail::detail_view;
 use format::ago;
 use table::draw_table;
@@ -29,6 +31,10 @@ pub(super) const SELECTED_BG: Color = Color::Indexed(237);
 pub(super) const HEADER_FG: Color = Color::Indexed(250);
 
 pub fn draw(f: &mut Frame, state: &mut AppState) {
+    if state.chat.is_some() {
+        draw_chat(f, state);
+        return;
+    }
     let [header, list, detail, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(5),

@@ -1,5 +1,6 @@
 use anyhow::Result;
 
+use crate::domain::devin::{DevinMessage, DevinSession};
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
 use crate::domain::review::review_targets;
@@ -15,6 +16,14 @@ pub enum Event {
     ChangedState(u64, PrOp, Result<String>),
     /// 1 件だけ取り直した結果. open でなくなっていれば None
     Reloaded(u64, Box<Result<Option<Pr>>>),
+    /// repo の Devin session 一覧
+    DevinSessions(Result<Vec<DevinSession>>),
+    /// session ID とそのメッセージ
+    DevinMessages(String, Result<Vec<DevinMessage>>),
+    /// 送信した session ID と, 送信後の session
+    DevinSent(String, Result<DevinSession>),
+    /// エディタで書いた内容. エディタが非 0 で終わったら None
+    Composed(Result<Option<String>>),
 }
 
 /// main への指示
@@ -56,6 +65,18 @@ pub enum Effect {
     },
     OpenUrl(String),
     ViewWeb(u64),
+    /// Devin session 一覧をスレッドで取る. 対象期間は runtime が決める
+    FetchSessions,
+    /// session ID のメッセージをスレッドで取る
+    FetchMessages(String),
+    SendMessage {
+        session_id: String,
+        text: String,
+    },
+    /// draft を入れた一時ファイルをエディタで開く. 結果は `Event::Composed` で返る
+    Compose {
+        draft: String,
+    },
 }
 
 /// watch を止める条件. 取り直した PR (open でなくなっていれば None) で判定する
