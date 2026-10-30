@@ -8,7 +8,8 @@ use crate::domain::pr::Pr;
 use crate::domain::review::arrange_reviews;
 use crate::domain::stack::arrange;
 use crate::infra::graphql::{
-    FRAGMENT, QUERY, QUERY_ONE, QUERY_REVIEW, parse_one, parse_review, parse_search,
+    FRAGMENT, FRAGMENT_REQUESTED, QUERY, QUERY_ONE, QUERY_REVIEW, parse_one, parse_review,
+    parse_search,
 };
 use crate::infra::process::run;
 
@@ -50,9 +51,12 @@ pub fn fetch_prs(dir: &Path, repo: &str) -> Result<Vec<Pr>> {
 }
 
 /// repo の open PR のうち, 自分にレビューが依頼されている (チーム経由を含む) か,
-/// 自分がレビューしたものを返す. 自分が author の PR は除く. 依頼中を先に並べる.
+/// 自分がレビューしたものを返す. 自分が author の PR は除く. 依頼中を依頼の古い順に先に並べる.
 pub fn fetch_reviews(dir: &Path, repo: &str) -> Result<Vec<Pr>> {
     let base = format!("repo:{repo} is:pr is:open -author:@me");
+    let (owner, _) = repo
+        .split_once('/')
+        .with_context(|| format!("repo 名が owner/name の形でない: {repo}"))?;
     let out = run(
         dir,
         "gh",
@@ -60,11 +64,13 @@ pub fn fetch_reviews(dir: &Path, repo: &str) -> Result<Vec<Pr>> {
             "api",
             "graphql",
             "-f",
-            &format!("query={QUERY_REVIEW}{FRAGMENT}"),
+            &format!("query={QUERY_REVIEW}{FRAGMENT}{FRAGMENT_REQUESTED}"),
             "-f",
             &format!("requested={base} review-requested:@me"),
             "-f",
             &format!("reviewed={base} reviewed-by:@me"),
+            "-f",
+            &format!("owner={owner}"),
         ],
     )?;
     Ok(arrange_reviews(parse_review(&out)?))

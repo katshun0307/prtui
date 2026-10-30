@@ -11,10 +11,17 @@ pub(crate) const QUERY: &str = r#"query($author:String!, $assignee:String!) {
   assignee: search(query:$assignee, type:ISSUE, first:100) { nodes { ...pr } }
 }"#;
 
-/// レビュータブ. 依頼中とレビュー済みを 2 つの alias で取り, 自分の立場を出すため viewer も取る
-pub(crate) const QUERY_REVIEW: &str = r#"query($requested:String!, $reviewed:String!) {
+/// レビュータブ. 依頼中とレビュー済みを 2 つの alias で取り, 自分の立場を出すため viewer も取る.
+/// 依頼中側は依頼を受けた時刻を出すため `FRAGMENT_REQUESTED` も取る.
+/// チーム経由の依頼を自分の所属チームに絞るため, repo の owner が組織なら自分の所属チームも取る.
+/// `role` は viewer の立場での絞り込みで, maintainer の扱いが不明なので MEMBER と ADMIN を両方取る
+pub(crate) const QUERY_REVIEW: &str = r#"query($requested:String!, $reviewed:String!, $owner:String!) {
   viewer { login }
-  requested: search(query:$requested, type:ISSUE, first:100) { nodes { ...pr } }
+  owner: repositoryOwner(login:$owner) { ... on Organization {
+    member: teams(first:100, role:MEMBER) { nodes { slug } }
+    admin: teams(first:100, role:ADMIN) { nodes { slug } }
+  } }
+  requested: search(query:$requested, type:ISSUE, first:100) { nodes { ...pr ...requested } }
   reviewed: search(query:$reviewed, type:ISSUE, first:100) { nodes { ...pr } }
 }"#;
 
@@ -46,6 +53,17 @@ fragment pr on PullRequest {
   } } } }
 }"#;
 
+/// レビュー依頼の履歴. reviewRequests には依頼の時刻が無いので timeline から取る
+pub(crate) const FRAGMENT_REQUESTED: &str = r#"
+fragment requested on PullRequest {
+  timelineItems(last:50, itemTypes:[REVIEW_REQUESTED_EVENT]) { nodes {
+    ... on ReviewRequestedEvent { createdAt requestedReviewer {
+      ... on User { login }
+      ... on Team { slug }
+    } }
+  } }
+}"#;
+
 #[derive(Deserialize)]
 struct Nodes<T> {
     nodes: Vec<T>,
@@ -64,6 +82,13 @@ struct Name {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ReviewRequest {
+    requested_reviewer: Option<RequestedReviewer>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RequestedEvent {
+    created_at: DateTime<Utc>,
     requested_reviewer: Option<RequestedReviewer>,
 }
 
@@ -152,6 +177,8 @@ struct RawPr {
     review_threads: Option<Nodes<Thread>>,
     commits: Option<Nodes<CommitNode>>,
     head_ref: Option<HeadRef>,
+    /// レビュータブの依頼中側だけ取る
+    timeline_items: Option<Nodes<RequestedEvent>>,
 }
 
 #[derive(Deserialize)]
@@ -184,8 +211,21 @@ struct ReviewResponse {
 #[derive(Deserialize)]
 struct ReviewData {
     viewer: Login,
+    /// owner が User なら空オブジェクトになる
+    owner: Option<Owner>,
     requested: Nodes<RawPr>,
     reviewed: Nodes<RawPr>,
+}
+
+#[derive(Deserialize)]
+struct Owner {
+    member: Option<Nodes<Slug>>,
+    admin: Option<Nodes<Slug>>,
+}
+
+#[derive(Deserialize)]
+struct Slug {
+    slug: String,
 }
 
 #[derive(Deserialize)]
@@ -226,6 +266,14 @@ pub(crate) fn parse_review(json: &str) -> Result<Vec<Pr>> {
     let resp: ReviewResponse =
         serde_json::from_str(json).context("GraphQL レスポンスの解析に失敗")?;
     let viewer = resp.data.viewer.login;
+    let my_teams: HashSet<String> = resp
+        .data
+        .owner
+        .into_iter()
+        .flat_map(|o| o.member.into_iter().chain(o.admin))
+        .flat_map(|n| n.nodes)
+        .map(|t| t.slug)
+        .collect();
 
     let mut seen = HashSet::new();
     let requested = resp.data.requested.nodes.into_iter().map(|r| (true, r));
@@ -233,7 +281,7 @@ pub(crate) fn parse_review(json: &str) -> Result<Vec<Pr>> {
     Ok(requested
         .chain(reviewed)
         .filter_map(|(requested, r)| {
-            let mine = my_review(&r, &viewer, requested);
+            let mine = my_review(&r, &viewer, &my_teams, requested);
             let mut p = convert(r)?;
             p.my_review = Some(mine);
             Some(p)
@@ -243,8 +291,10 @@ pub(crate) fn parse_review(json: &str) -> Result<Vec<Pr>> {
 }
 
 /// `reviewRequests` に自分の login が無ければ, 依頼はチーム経由で来ている.
-/// login は大文字小文字を区別せずに比べる
-fn my_review(r: &RawPr, viewer: &str, requested: bool) -> MyReview {
+/// 依頼されているチームのうち自分の所属チームを `via_teams` にする. 1 つも当たらなければ
+/// (`read:org` が無い, 子チーム経由で親チームに依頼された, など) 依頼されている全チームにする.
+/// login は大文字小文字を区別せずに比べる. 依頼を受けた時刻は `requested_at` を見る
+fn my_review(r: &RawPr, viewer: &str, my_teams: &HashSet<String>, requested: bool) -> MyReview {
     let requests = r.review_requests.as_ref().map_or(&[][..], |n| &n.nodes);
     let reviewers = || {
         requests
@@ -257,7 +307,13 @@ fn my_review(r: &RawPr, viewer: &str, requested: bool) -> MyReview {
             .is_some_and(|l| l.eq_ignore_ascii_case(viewer))
     });
     let via_teams = if requested && !direct {
-        reviewers().filter_map(|x| x.slug.clone()).collect()
+        let teams: Vec<String> = reviewers().filter_map(|x| x.slug.clone()).collect();
+        let mine: Vec<String> = teams
+            .iter()
+            .filter(|t| my_teams.contains(*t))
+            .cloned()
+            .collect();
+        if mine.is_empty() { teams } else { mine }
     } else {
         vec![]
     };
@@ -272,11 +328,42 @@ fn my_review(r: &RawPr, viewer: &str, requested: bool) -> MyReview {
                 .is_some_and(|a| a.login.eq_ignore_ascii_case(viewer))
         })
         .find_map(|rv| review_state(&rv.state));
+    let requested_at = if requested {
+        requested_at(r, viewer, &via_teams)
+    } else {
+        None
+    };
     MyReview {
         requested,
         last,
         via_teams,
+        requested_at,
     }
+}
+
+/// 今の依頼を受けた時刻. `teams` が空なら直接の依頼とみなし, 自分宛ての最新の event を使う
+/// (再依頼なら最後の依頼). チーム経由なら, チームごとの最新の event のうち最も古いものを使う.
+/// 所属チームで絞れなかったときに, 後から関係ないチームが依頼されても待ち時間を短く見せないため
+fn requested_at(r: &RawPr, viewer: &str, teams: &[String]) -> Option<DateTime<Utc>> {
+    let events = r.timeline_items.as_ref().map_or(&[][..], |n| &n.nodes);
+    let latest_for = |hit: &dyn Fn(&RequestedReviewer) -> bool| {
+        events
+            .iter()
+            .filter(|e| e.requested_reviewer.as_ref().is_some_and(hit))
+            .map(|e| e.created_at)
+            .max()
+    };
+    if teams.is_empty() {
+        return latest_for(&|x| {
+            x.login
+                .as_deref()
+                .is_some_and(|l| l.eq_ignore_ascii_case(viewer))
+        });
+    }
+    teams
+        .iter()
+        .filter_map(|t| latest_for(&|x| x.slug.as_ref() == Some(t)))
+        .min()
 }
 
 /// 1 件取得の結果を解析する. open でなくなっていれば None
@@ -611,17 +698,86 @@ mod tests {
         assert!(parse_one(missing).unwrap().is_none());
     }
 
+    /// 所属チームが取れれば依頼されているチームをそれで絞り, 依頼時刻もそのチームだけで見る
+    #[test]
+    fn parse_review_narrows_to_my_teams() {
+        let json = |owner: &str| {
+            format!(
+                r#"{{"data":{{
+                    "viewer":{{"login":"me"}},
+                    "owner":{owner},
+                    "requested":{{"nodes":[
+                        {{"number":1,"state":"OPEN",
+                         "reviewRequests":{{"nodes":[
+                            {{"requestedReviewer":{{"slug":"backend"}}}},
+                            {{"requestedReviewer":{{"slug":"frontend"}}}}
+                         ]}},
+                         "timelineItems":{{"nodes":[
+                            {{"createdAt":"2026-01-01T00:00:00Z","requestedReviewer":{{"slug":"backend"}}}},
+                            {{"createdAt":"2026-01-03T00:00:00Z","requestedReviewer":{{"slug":"frontend"}}}},
+                            {{"createdAt":"2026-01-05T00:00:00Z","requestedReviewer":{{"slug":"frontend"}}}}
+                         ]}}}}
+                    ]}},
+                    "reviewed":{{"nodes":[]}}
+                }}}}"#
+            )
+        };
+        let got = |owner: &str| {
+            let m = parse_review(&json(owner)).unwrap()[0]
+                .my_review
+                .clone()
+                .unwrap();
+            (m.via_teams, m.requested_at.map(|t| t.to_rfc3339()))
+        };
+        let teams = |v: &[&str]| v.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+        // maintainer として所属するチームも拾う. 再依頼されたチームは最後の依頼
+        assert_eq!(
+            got(r#"{"member":{"nodes":[{"slug":"ops"}]},"admin":{"nodes":[{"slug":"frontend"}]}}"#),
+            (
+                teams(&["frontend"]),
+                Some("2026-01-05T00:00:00+00:00".into())
+            )
+        );
+        // 所属チームが当たらない, owner が User (空オブジェクト), 取れなかったときは全チームに戻す
+        for owner in [
+            r#"{"member":{"nodes":[{"slug":"ops"}]},"admin":{"nodes":[]}}"#,
+            "{}",
+            "null",
+        ] {
+            assert_eq!(
+                got(owner),
+                (
+                    teams(&["backend", "frontend"]),
+                    Some("2026-01-01T00:00:00+00:00".into())
+                )
+            );
+        }
+    }
+
     #[test]
     fn parse_review_sets_my_review() {
         let json = r#"{"data":{
             "viewer":{"login":"Me"},
             "requested":{"nodes":[
                 {"number":1,"state":"OPEN",
-                 "reviewRequests":{"nodes":[{"requestedReviewer":{"login":"me"}}]}},
+                 "reviewRequests":{"nodes":[{"requestedReviewer":{"login":"me"}}]},
+                 "timelineItems":{"nodes":[
+                    {"createdAt":"2026-01-02T00:00:00Z","requestedReviewer":{"login":"ME"}},
+                    {"createdAt":"2026-01-04T00:00:00Z","requestedReviewer":{"login":"bob"}},
+                    {"createdAt":"2026-01-01T00:00:00Z","requestedReviewer":{"login":"me"}},
+                    {"createdAt":"2026-01-01T00:00:00Z","requestedReviewer":null}
+                 ]}},
                 {"number":2,"state":"OPEN",
                  "reviewRequests":{"nodes":[
                     {"requestedReviewer":{"slug":"backend"}},
-                    {"requestedReviewer":{"login":"bob"}}
+                    {"requestedReviewer":{"login":"bob"}},
+                    {"requestedReviewer":{"slug":"frontend"}}
+                 ]},
+                 "timelineItems":{"nodes":[
+                    {"createdAt":"2026-01-01T00:00:00Z","requestedReviewer":{"slug":"backend"}},
+                    {"createdAt":"2026-01-03T00:00:00Z","requestedReviewer":{"slug":"backend"}},
+                    {"createdAt":"2026-01-05T00:00:00Z","requestedReviewer":{"login":"bob"}},
+                    {"createdAt":"2026-01-06T00:00:00Z","requestedReviewer":{"slug":"frontend"}}
                  ]},
                  "latestReviews":{"nodes":[{"state":"APPROVED","author":{"login":"me"}}]}},
                 {}
@@ -629,6 +785,9 @@ mod tests {
             "reviewed":{"nodes":[
                 {"number":2,"state":"OPEN"},
                 {"number":3,"state":"OPEN",
+                 "timelineItems":{"nodes":[
+                    {"createdAt":"2026-01-01T00:00:00Z","requestedReviewer":{"login":"me"}}
+                 ]},
                  "latestReviews":{"nodes":[
                     {"state":"APPROVED","author":{"login":"bob"}},
                     {"state":"CHANGES_REQUESTED","author":{"login":"ME"}}
@@ -642,18 +801,34 @@ mod tests {
             .into_iter()
             .map(|p| (p.number, p.my_review.unwrap()))
             .collect();
-        let mine = |requested, last, teams: &[&str]| MyReview {
+        let mine = |requested, last, teams: &[&str], at: Option<&str>| MyReview {
             requested,
             last,
             via_teams: teams.iter().map(|t| t.to_string()).collect(),
+            requested_at: at.map(|s| s.parse().unwrap()),
         };
         assert_eq!(
             got,
             vec![
-                (1, mine(true, None, &[])),
-                (2, mine(true, Some(ReviewerState::Approved), &["backend"])),
-                (3, mine(false, Some(ReviewerState::ChangesRequested), &[])),
-                (4, mine(false, None, &[])),
+                // 自分宛ての最新の依頼. 他人宛ては見ない
+                (1, mine(true, None, &[], Some("2026-01-02T00:00:00Z"))),
+                // チーム経由ならチームごとの最新の依頼のうち最も古いもの.
+                // 後から依頼された frontend (1/6) に押し出されない
+                (
+                    2,
+                    mine(
+                        true,
+                        Some(ReviewerState::Approved),
+                        &["backend", "frontend"],
+                        Some("2026-01-03T00:00:00Z")
+                    )
+                ),
+                // 依頼中でなければ timeline があっても None
+                (
+                    3,
+                    mine(false, Some(ReviewerState::ChangesRequested), &[], None)
+                ),
+                (4, mine(false, None, &[], None)),
             ]
         );
     }

@@ -33,8 +33,9 @@
   - 対象: open PR のうち `review-requested:@me` か `reviewed-by:@me` に当たるもの. どちらも `-author:@me` を付けて自分の PR を除く. `review-requested` はチーム宛ての依頼も拾う (`user-review-requested` にしなかったのはユーザーの選択). `reviewed-by` はコメントだけ残した PR も拾う. Draft も出す
   - 取得: `QUERY_REVIEW` で 2 つの alias と `viewer { login }` を 1 リクエストで取り, 依頼中側を先に見て番号で重複を除く. 自分タブとは別スレッドで, 取るのは同じタイミング (起動時, 5 分ごと, `r`). 失敗は一覧のタイトルに赤で出し, フッターには出さない. キャッシュは同じファイルの `reviews` に取得時刻と一緒に入れる
   - 切り替え: `Tab` / `Shift-Tab` と `1` / `2`. ヘッダに `1 自分 (n)  2 レビュー (m)` を出し, 今のタブを反転する. 選択位置と `t` の絞り込みはタブごとに持つ
-  - 自分の立場 (`MyReview`): 依頼中の検索に当たれば requested. `latestReviews` から自分 (大文字小文字を無視) の最新のレビューを取る. 依頼中かつレビュー済みなら「再依頼」. `reviewRequests` に自分の login が無ければチーム経由とみなし, PR に依頼されているチームの slug を詳細欄に `依頼: <team> 経由` で出す. 自分の所属チームは取っていないので, 関係ないチームも混ざりうる
-  - 並び: 依頼中 (再依頼を含む) を先に, その中とレビュー済みの中はそれぞれ更新日時の降順. stack はまとめない
+  - 自分の立場 (`MyReview`): 依頼中の検索に当たれば requested. `latestReviews` から自分 (大文字小文字を無視) の最新のレビューを取る. 依頼中かつレビュー済みなら「再依頼」. `reviewRequests` に自分の login が無ければチーム経由とみなし, PR に依頼されているチームのうち自分の所属チームの slug を詳細欄に `依頼: <team> 経由` で出す. 所属チームは `QUERY_REVIEW` で `repositoryOwner(login:<owner>)` が Organization のとき `teams(role:MEMBER)` と `teams(role:ADMIN)` を取る (maintainer が MEMBER に入るか不明なので両方). 1 つも当たらなければ (owner が User, 子チーム経由で親チームに依頼された, など) 依頼されている全チームに戻す. `read:org` の無いトークンでこのクエリが失敗するかは確かめていない
+  - 並び: 依頼中 (再依頼を含む) を先に, その中は依頼を受けた時刻の古い順 (古い依頼から片付けるため. ユーザーの指定). 依頼時刻が分からなければ更新日時で代える. レビュー済みはその後ろに更新日時の降順. stack はまとめない
+  - 依頼時刻: `reviewRequests` に時刻が無いので, 依頼中側の alias だけ `FRAGMENT_REQUESTED` で `timelineItems(last:50, itemTypes:[REVIEW_REQUESTED_EVENT])` を取る. 直接の依頼なら自分宛ての最新の event (再依頼なら最後の依頼) を `MyReview::requested_at` にする. チーム経由なら, 今依頼されているチームごとの最新の event のうち最も古いものを使う. 所属チームで絞れず全チームに戻ったときに, 後から関係ないチームが依頼されても待ち時間を短く見せないため (サブエージェントのレビューの指摘). 依頼時刻が同じなら番号の昇順. 一覧の「依頼」列に経過時間を yellow で出す
   - 操作: `Enter`/`c`, `d`, `o`, `l`, `L`, `v`, `t`, `r` は使える. 他人の PR を変える `u` / `O` / `DD` / `XX` / `RR` は無効にし, `<key> はレビュータブでは使えない` を出す (ユーザーの指定)
   - Devin Review: `V` で `https://app.devin.ai/review/<owner>/<name>/pull/<n>` を `open` で開く. repo と PR 番号だけで組み立てるので, Devin の設定 (token, org) も API も要らない. ユーザーの指定でレビュータブだけにした. 自分タブでは何もしない
 - 実装: Rust (edition 2024), ratatui 0.30 (crossterm は `ratatui::crossterm` の re-export を使う), serde, anyhow, chrono. GitHub と git は `gh` と `git` コマンドを `std::process::Command` で呼ぶ. 非同期 runtime は使わず, 時間のかかる処理はスレッド + mpsc で UI をブロックしない
@@ -80,6 +81,8 @@ refactor 前は 1 つの `App` に状態, キー判断, スレッド起動, gh �
 ## 確認済み
 
 - 2026-10-30: レビュータブを追加. clippy 0 件, fmt 通過, `cargo test` 98 件通過. 検証用 repo で `--dump` の `# review` に依頼中 2 件と承認済 2 件が依頼中を先にして出ること, tmux で `Tab` / `1` / `2` の切り替え, レビュータブの列, `u` のエラー表示, 再起動後にキャッシュから `(キャッシュ)` 付きで出ることを確認
+- 2026-10-30: レビュータブの依頼中を依頼時刻の古い順に並べ, 「依頼」列を追加. `cargo test` 101 件通過. 検証用 repo の `--dump` と tmux で依頼中 2 件が 1h → 5m の順に並び, レビュー済みがその下にまとまることを確認
+- 2026-10-30: チーム経由の依頼を自分の所属チームに絞る. `cargo test` 102 件通過. 検証用 repo の `--dump` でクエリが通ることを確認. その時点で依頼中の PR が無かったので, チーム経由の絞り込みは単体テストでだけ確認した
 
 - `cargo clippy --all-targets` の警告 0 件, `cargo fmt --check` 通過
 - `--dump` で 検証用 repo の実 PR 28 件と main 列が取れる

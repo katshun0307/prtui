@@ -1,11 +1,26 @@
+use std::cmp::Ordering;
+
 use crate::domain::pr::{Pr, ReviewerState};
 
-/// レビュータブの並び. 依頼中 (再依頼を含む) を先に, その中とレビュー済みの中はそれぞれ更新日時の降順.
-/// 他人の PR の stack はまとめない
+/// レビュータブの並び. 依頼中 (再依頼を含む) を先に, 依頼を受けた時刻の古い順に並べる.
+/// 古い依頼から片付けるため. 依頼時刻が分からなければ更新日時で代える.
+/// レビュー済みはその後ろに更新日時の降順. 他人の PR の stack はまとめない
 pub fn arrange_reviews(mut prs: Vec<Pr>) -> Vec<Pr> {
-    prs.sort_by_key(|p| {
-        let requested = p.my_review.as_ref().is_some_and(|m| m.requested);
-        (!requested, std::cmp::Reverse(p.updated_at))
+    let requested = |p: &Pr| {
+        p.my_review
+            .as_ref()
+            .filter(|m| m.requested)
+            .map(|m| m.requested_at.unwrap_or(p.updated_at))
+    };
+    prs.sort_by(|a, b| {
+        match (requested(a), requested(b)) {
+            (Some(x), Some(y)) => x.cmp(&y),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => b.updated_at.cmp(&a.updated_at),
+        }
+        // 同じ時刻なら番号で決め, 取り直すたびに入れ替わらないようにする
+        .then(a.number.cmp(&b.number))
     });
     prs
 }
@@ -32,26 +47,32 @@ mod tests {
     use crate::domain::pr::{MyReview, Pr, Reviewer, ReviewerState};
 
     #[test]
-    fn arrange_reviews_puts_requested_first() {
+    fn arrange_reviews_puts_oldest_request_first() {
         use chrono::{TimeZone, Utc};
-        let at = |n: u64, requested: bool, day: u32| {
+        let day = |d: u32| Utc.with_ymd_and_hms(2026, 1, d, 0, 0, 0).unwrap();
+        let at = |n: u64, requested: bool, updated: u32, requested_at: Option<u32>| {
             let mut p = Pr::fixture(n, "h", "main");
-            p.updated_at = Utc.with_ymd_and_hms(2026, 1, day, 0, 0, 0).unwrap();
+            p.updated_at = day(updated);
             p.my_review = Some(MyReview {
                 requested,
                 last: None,
                 via_teams: vec![],
+                requested_at: requested_at.map(day),
             });
             p
         };
         let prs = vec![
-            at(1, false, 9),
-            at(2, true, 1),
-            at(3, true, 5),
-            at(4, false, 3),
+            at(1, false, 9, None),
+            at(2, true, 9, Some(4)),
+            at(3, true, 1, Some(6)),
+            at(4, false, 3, None),
+            // 依頼時刻が分からなければ更新日時 (5 日) で並べる
+            at(5, true, 5, None),
+            at(7, false, 3, None),
+            at(6, true, 2, Some(4)),
         ];
         let got: Vec<u64> = arrange_reviews(prs).iter().map(|p| p.number).collect();
-        assert_eq!(got, vec![3, 2, 1, 4]);
+        assert_eq!(got, vec![2, 6, 5, 3, 1, 4, 7]);
     }
 
     fn configured() -> Vec<String> {

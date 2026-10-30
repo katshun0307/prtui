@@ -70,9 +70,12 @@ pub struct MyReview {
     pub requested: bool,
     /// 自分の最新のレビュー. まだレビューしていなければ None
     pub last: Option<ReviewerState>,
-    /// 自分個人ではなくチーム経由で依頼されているとき, PR に依頼されているチームの slug.
-    /// 自分がどのチームに居るかは取っていないので, 関係ないチームも混ざりうる
+    /// 自分個人ではなくチーム経由で依頼されているとき, PR に依頼されているチームのうち自分の所属チームの slug.
+    /// 所属チームが 1 つも当たらなければ (`read:org` が無い, など) 依頼されている全チーム
     pub via_teams: Vec<String>,
+    /// 今の依頼 (再依頼なら最後の依頼) を受けた時刻. 依頼中でないか, timeline に見つからなければ None
+    #[serde(default)]
+    pub requested_at: Option<DateTime<Utc>>,
 }
 
 impl MyReview {
@@ -159,6 +162,7 @@ mod tests {
                 requested,
                 last,
                 via_teams: vec![],
+                requested_at: None,
             }
             .label()
         };

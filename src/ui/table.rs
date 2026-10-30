@@ -107,6 +107,7 @@ fn review_rows(state: &AppState) -> Columns<'static> {
                 size_cell(p),
                 Cell::from(p.author.clone()),
                 my_review_cell(p),
+                requested_at_cell(p),
                 reviewer_cell(p),
                 local_cell(&state.local, p),
                 Cell::from(devin_span(state.devin_for(p))),
@@ -123,6 +124,7 @@ fn review_rows(state: &AppState) -> Columns<'static> {
         "差分",
         "Author",
         "自分",
+        "依頼",
         "Reviewer",
         "Local",
         "Devin",
@@ -137,6 +139,7 @@ fn review_rows(state: &AppState) -> Columns<'static> {
         Constraint::Length(12),
         Constraint::Length(14),
         Constraint::Length(10),
+        Constraint::Length(4),
         Constraint::Length(10),
         Constraint::Length(10),
         Constraint::Length(11),
@@ -168,6 +171,14 @@ fn table_title(state: &AppState, count: usize) -> Line<'static> {
 fn my_review_cell(p: &Pr) -> Cell<'static> {
     match &p.my_review {
         Some(m) => Cell::from(m.label()).fg(my_review_color(m)),
+        None => Cell::from(""),
+    }
+}
+
+/// 依頼を受けてからの経過時間. 対応待ちなので yellow. レビュー済みと時刻が分からないものは空
+fn requested_at_cell(p: &Pr) -> Cell<'static> {
+    match p.my_review.as_ref().and_then(|m| m.requested_at) {
+        Some(t) => Cell::from(ago(t)).yellow(),
         None => Cell::from(""),
     }
 }
@@ -338,6 +349,7 @@ mod tests {
                 requested,
                 last,
                 via_teams: vec![],
+                requested_at: None,
             })
         };
         assert_eq!(fg(true, None), Color::Yellow);

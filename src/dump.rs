@@ -73,10 +73,12 @@ pub fn run(dir: PathBuf, repo: &str) -> Result<()> {
         let devin = session_for(&sessions, &p.url)
             .map_or("-".into(), |(s, n)| ui::format::devin_label(s, n));
         println!(
-            "#{}\tauthor={}\tme={}\tvia={}\tdraft={}\tthreads={}/{}\tlocal={}\tdevin={devin}\t{}\t{}",
+            "#{}\tauthor={}\tme={}\trequested={}\tvia={}\tdraft={}\tthreads={}/{}\tlocal={}\tdevin={devin}\t{}\t{}",
             p.number,
             p.author,
             mine.map_or("-", |m| m.label()),
+            mine.and_then(|m| m.requested_at)
+                .map_or("-".into(), ui::format::ago),
             if teams.is_empty() { "-" } else { &teams },
             p.is_draft,
             p.threads_open,
