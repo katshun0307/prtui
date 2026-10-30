@@ -35,6 +35,7 @@
   - 自分の立場 (`MyReview`): 依頼中の検索に当たれば requested. `latestReviews` から自分 (大文字小文字を無視) の最新のレビューを取る. 依頼中かつレビュー済みなら「再依頼」. `reviewRequests` に自分の login が無ければチーム経由とみなし, PR に依頼されているチームの slug を詳細欄に `依頼: <team> 経由` で出す. 自分の所属チームは取っていないので, 関係ないチームも混ざりうる
   - 並び: 依頼中 (再依頼を含む) を先に, その中とレビュー済みの中はそれぞれ更新日時の降順. stack はまとめない
   - 操作: `Enter`/`c`, `d`, `o`, `l`, `L`, `v`, `t`, `r` は使える. 他人の PR を変える `u` / `O` / `DD` / `XX` / `RR` は無効にし, `<key> はレビュータブでは使えない` を出す (ユーザーの指定)
+  - Devin Review: `V` で `https://app.devin.ai/review/<owner>/<name>/pull/<n>` を `open` で開く. repo と PR 番号だけで組み立てるので, Devin の設定 (token, org) も API も要らない. ユーザーの指定でレビュータブだけにした. 自分タブでは何もしない
 - 実装: Rust (edition 2024), ratatui 0.30 (crossterm は `ratatui::crossterm` の re-export を使う), serde, anyhow, chrono. GitHub と git は `gh` と `git` コマンドを `std::process::Command` で呼ぶ. 非同期 runtime は使わず, 時間のかかる処理はスレッド + mpsc で UI をブロックしない
 
 ## 構成
@@ -45,7 +46,7 @@
 |---|---|
 | `src/main.rs` | 引数処理 (`-C`, `--dump`), 端末初期化, イベントループ, 外部コマンド実行時の TUI 一時停止 |
 | `src/dump.rs` | `--dump` のテキスト出力 |
-| `src/domain/` | 純粋な型と関数. `pr.rs` (`Pr`, `MyReview`), `stack.rs` (`arrange`, `group_stacks`), `review.rs` (`review_targets`, `arrange_reviews`), `linear.rs` (issue キーと review URL の抽出), `local.rs` (`LocalState`, `parse_reviewers`), `op.rs` (`PrOp`), `devin.rs` (Devin の型と `session_for`) |
+| `src/domain/` | 純粋な型と関数. `pr.rs` (`Pr`, `MyReview`), `stack.rs` (`arrange`, `group_stacks`), `review.rs` (`review_targets`, `arrange_reviews`), `linear.rs` (issue キーと review URL の抽出), `local.rs` (`LocalState`, `parse_reviewers`), `op.rs` (`PrOp`), `devin.rs` (Devin の型と `session_for`, `review_url`) |
 | `src/infra/process.rs` | コマンド実行ヘルパ `run`, `open_url` |
 | `src/infra/git.rs` | メイン worktree の解決 `main_worktree`, `read_local_state` (現在ブランチ, dirty, refs/heads の oid, git config) |
 | `src/infra/gh.rs` | gh コマンド. 全件取得 `fetch_prs`, レビュータブの `fetch_reviews`, 1 件取得 `fetch_pr`, `update_branch`, `checkout`, `change_state`, `view_web`, `linear_review_url` |

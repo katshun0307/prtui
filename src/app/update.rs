@@ -8,6 +8,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::event::{Effect, Event, WatchUntil};
 use super::state::{AppState, ChatView, Tab};
+use crate::domain::devin::review_url;
 use crate::domain::linear::linear_issue_key;
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
@@ -332,6 +333,11 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('l') => open_linear(state),
         KeyCode::Char('L') => open_linear_review(state),
         KeyCode::Char('v') => open_chat(state),
+        KeyCode::Char('V') if state.tab == Tab::Review => state
+            .selected()
+            .map(|p| Effect::OpenUrl(review_url(&state.repo, p.number)))
+            .into_iter()
+            .collect(),
         KeyCode::Char('d') => state
             .selected()
             .map(|p| {
@@ -824,6 +830,18 @@ mod tests {
         assert_eq!(handle_key(&mut s, key('c')), vec![Effect::Checkout(10)]);
         assert_eq!(handle_key(&mut s, key('o')), vec![Effect::ViewWeb(10)]);
         assert_eq!(handle_key(&mut s, key('L')), vec![Effect::LinearReview(10)]);
+        assert_eq!(
+            handle_key(&mut s, key('V')),
+            vec![Effect::OpenUrl(
+                "https://app.devin.ai/review/o/r/pull/10".into()
+            )]
+        );
+    }
+
+    #[test]
+    fn devin_review_is_review_tab_only() {
+        let mut s = state(vec![pr(1)]);
+        assert!(handle_key(&mut s, key('V')).is_empty());
     }
 
     #[test]

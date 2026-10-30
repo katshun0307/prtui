@@ -73,6 +73,11 @@ pub struct DevinMessage {
     pub created_at: DateTime<Utc>,
 }
 
+/// PR の Devin Review のページ. repo は `owner/name`
+pub fn review_url(repo: &str, number: u64) -> String {
+    format!("https://app.devin.ai/review/{repo}/pull/{number}")
+}
+
 /// PR の URL に紐づく session のうち updated_at が最新のものと, 紐づく session の件数.
 /// URL は末尾の `/` と大文字小文字を無視して比べる
 pub fn session_for<'a>(
@@ -118,6 +123,14 @@ impl DevinSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn review_url_from_repo_and_number() {
+        assert_eq!(
+            review_url("acme/app", 8255),
+            "https://app.devin.ai/review/acme/app/pull/8255"
+        );
+    }
 
     fn at(secs: i64) -> DateTime<Utc> {
         DateTime::from_timestamp(secs, 0).unwrap()

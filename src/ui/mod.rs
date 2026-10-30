@@ -175,6 +175,7 @@ fn footer_line(state: &AppState) -> Line<'static> {
         ("l", "Linear"),
         ("L", "Linear review"),
         ("v", "Devin"),
+        ("V", "Devin Review"),
         ("t", "Draft のみ"),
         ("r", "更新"),
         ("q", "終了"),
