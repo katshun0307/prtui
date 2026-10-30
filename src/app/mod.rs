@@ -5,4 +5,4 @@ mod update;
 
 pub use event::Action;
 pub use runtime::App;
-pub use state::AppState;
+pub use state::{AppState, Tab};

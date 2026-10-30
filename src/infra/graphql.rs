@@ -4,11 +4,18 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
-use crate::domain::pr::{Check, CheckState, Pr, Reviewer, ReviewerState};
+use crate::domain::pr::{Check, CheckState, MyReview, Pr, Reviewer, ReviewerState};
 
 pub(crate) const QUERY: &str = r#"query($author:String!, $assignee:String!) {
   author: search(query:$author, type:ISSUE, first:100) { nodes { ...pr } }
   assignee: search(query:$assignee, type:ISSUE, first:100) { nodes { ...pr } }
+}"#;
+
+/// レビュータブ. 依頼中とレビュー済みを 2 つの alias で取り, 自分の立場を出すため viewer も取る
+pub(crate) const QUERY_REVIEW: &str = r#"query($requested:String!, $reviewed:String!) {
+  viewer { login }
+  requested: search(query:$requested, type:ISSUE, first:100) { nodes { ...pr } }
+  reviewed: search(query:$reviewed, type:ISSUE, first:100) { nodes { ...pr } }
 }"#;
 
 /// 1 件だけ取り直すときのクエリ. close 済みかを見るため state も取る
@@ -170,6 +177,18 @@ struct Data {
 }
 
 #[derive(Deserialize)]
+struct ReviewResponse {
+    data: ReviewData,
+}
+
+#[derive(Deserialize)]
+struct ReviewData {
+    viewer: Login,
+    requested: Nodes<RawPr>,
+    reviewed: Nodes<RawPr>,
+}
+
+#[derive(Deserialize)]
 struct OneResponse {
     data: OneData,
 }
@@ -199,6 +218,65 @@ pub(crate) fn parse_search(json: &str) -> Result<Vec<Pr>> {
         .filter_map(convert)
         .filter(|p| seen.insert(p.number))
         .collect())
+}
+
+/// レビュータブの検索結果を解析し, `my_review` を入れて番号で重複を除く. 並べ替えはしない.
+/// 依頼中側を先に見るので, 両方に当たる PR は依頼中になる
+pub(crate) fn parse_review(json: &str) -> Result<Vec<Pr>> {
+    let resp: ReviewResponse =
+        serde_json::from_str(json).context("GraphQL レスポンスの解析に失敗")?;
+    let viewer = resp.data.viewer.login;
+
+    let mut seen = HashSet::new();
+    let requested = resp.data.requested.nodes.into_iter().map(|r| (true, r));
+    let reviewed = resp.data.reviewed.nodes.into_iter().map(|r| (false, r));
+    Ok(requested
+        .chain(reviewed)
+        .filter_map(|(requested, r)| {
+            let mine = my_review(&r, &viewer, requested);
+            let mut p = convert(r)?;
+            p.my_review = Some(mine);
+            Some(p)
+        })
+        .filter(|p| seen.insert(p.number))
+        .collect())
+}
+
+/// `reviewRequests` に自分の login が無ければ, 依頼はチーム経由で来ている.
+/// login は大文字小文字を区別せずに比べる
+fn my_review(r: &RawPr, viewer: &str, requested: bool) -> MyReview {
+    let requests = r.review_requests.as_ref().map_or(&[][..], |n| &n.nodes);
+    let reviewers = || {
+        requests
+            .iter()
+            .filter_map(|q| q.requested_reviewer.as_ref())
+    };
+    let direct = reviewers().any(|x| {
+        x.login
+            .as_deref()
+            .is_some_and(|l| l.eq_ignore_ascii_case(viewer))
+    });
+    let via_teams = if requested && !direct {
+        reviewers().filter_map(|x| x.slug.clone()).collect()
+    } else {
+        vec![]
+    };
+    let last = r
+        .latest_reviews
+        .as_ref()
+        .into_iter()
+        .flat_map(|n| &n.nodes)
+        .filter(|rv| {
+            rv.author
+                .as_ref()
+                .is_some_and(|a| a.login.eq_ignore_ascii_case(viewer))
+        })
+        .find_map(|rv| review_state(&rv.state));
+    MyReview {
+        requested,
+        last,
+        via_teams,
+    }
 }
 
 /// 1 件取得の結果を解析する. open でなくなっていれば None
@@ -256,6 +334,7 @@ fn convert(r: RawPr) -> Option<Pr> {
         threads_total: threads.len(),
         threads_open: threads.iter().filter(|t| !t.is_resolved).count(),
         behind_main: r.head_ref.and_then(|h| h.compare).map(|c| c.ahead_by),
+        my_review: None,
     })
 }
 
@@ -283,15 +362,22 @@ fn convert_reviewers(
         if name == author || out.iter().any(|r| r.name == name) {
             continue;
         }
-        let state = match rv.state.as_str() {
-            "APPROVED" => ReviewerState::Approved,
-            "CHANGES_REQUESTED" => ReviewerState::ChangesRequested,
-            "COMMENTED" => ReviewerState::Commented,
-            _ => continue,
+        let Some(state) = review_state(&rv.state) else {
+            continue;
         };
         out.push(Reviewer { name, state });
     }
     out
+}
+
+/// DISMISSED と未送信 (PENDING) は None
+fn review_state(s: &str) -> Option<ReviewerState> {
+    match s {
+        "APPROVED" => Some(ReviewerState::Approved),
+        "CHANGES_REQUESTED" => Some(ReviewerState::ChangesRequested),
+        "COMMENTED" => Some(ReviewerState::Commented),
+        _ => None,
+    }
 }
 
 fn convert_check(c: Context_) -> Check {
@@ -523,5 +609,52 @@ mod tests {
         assert!(parse_one(&one("CLOSED")).unwrap().is_none());
         let missing = r#"{"data":{"repository":{"pullRequest":null}}}"#;
         assert!(parse_one(missing).unwrap().is_none());
+    }
+
+    #[test]
+    fn parse_review_sets_my_review() {
+        let json = r#"{"data":{
+            "viewer":{"login":"Me"},
+            "requested":{"nodes":[
+                {"number":1,"state":"OPEN",
+                 "reviewRequests":{"nodes":[{"requestedReviewer":{"login":"me"}}]}},
+                {"number":2,"state":"OPEN",
+                 "reviewRequests":{"nodes":[
+                    {"requestedReviewer":{"slug":"backend"}},
+                    {"requestedReviewer":{"login":"bob"}}
+                 ]},
+                 "latestReviews":{"nodes":[{"state":"APPROVED","author":{"login":"me"}}]}},
+                {}
+            ]},
+            "reviewed":{"nodes":[
+                {"number":2,"state":"OPEN"},
+                {"number":3,"state":"OPEN",
+                 "latestReviews":{"nodes":[
+                    {"state":"APPROVED","author":{"login":"bob"}},
+                    {"state":"CHANGES_REQUESTED","author":{"login":"ME"}}
+                 ]}},
+                {"number":4,"state":"OPEN",
+                 "latestReviews":{"nodes":[{"state":"DISMISSED","author":{"login":"me"}}]}}
+            ]}
+        }}"#;
+        let prs = parse_review(json).unwrap();
+        let got: Vec<(u64, MyReview)> = prs
+            .into_iter()
+            .map(|p| (p.number, p.my_review.unwrap()))
+            .collect();
+        let mine = |requested, last, teams: &[&str]| MyReview {
+            requested,
+            last,
+            via_teams: teams.iter().map(|t| t.to_string()).collect(),
+        };
+        assert_eq!(
+            got,
+            vec![
+                (1, mine(true, None, &[])),
+                (2, mine(true, Some(ReviewerState::Approved), &["backend"])),
+                (3, mine(false, Some(ReviewerState::ChangesRequested), &[])),
+                (4, mine(false, None, &[])),
+            ]
+        );
     }
 }

@@ -58,6 +58,36 @@ pub struct Pr {
     pub threads_open: usize,
     /// main にあって PR ブランチに無いコミット数. head ブランチが消えていれば None
     pub behind_main: Option<u64>,
+    /// レビュータブの PR だけ Some. 自分 (viewer) がどう関わっているか
+    #[serde(default)]
+    pub my_review: Option<MyReview>,
+}
+
+/// レビュータブの PR に対する自分の立場
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MyReview {
+    /// `review-requested:@me` に当たる. チーム経由の依頼も含む
+    pub requested: bool,
+    /// 自分の最新のレビュー. まだレビューしていなければ None
+    pub last: Option<ReviewerState>,
+    /// 自分個人ではなくチーム経由で依頼されているとき, PR に依頼されているチームの slug.
+    /// 自分がどのチームに居るかは取っていないので, 関係ないチームも混ざりうる
+    pub via_teams: Vec<String>,
+}
+
+impl MyReview {
+    /// 一覧の「自分」列の表記. 依頼中でもレビュー済みなら再依頼とみなす
+    pub fn label(&self) -> &'static str {
+        match (self.requested, self.last) {
+            (true, Some(_)) => "再依頼",
+            (true, None) => "依頼中",
+            (false, Some(ReviewerState::Approved)) => "承認済",
+            (false, Some(ReviewerState::ChangesRequested)) => "変更要求",
+            (false, Some(ReviewerState::Commented)) => "コメント済",
+            // reviewed-by には当たるが latestReviews に残っていない (DISMISSED など)
+            (false, Some(ReviewerState::Requested) | None) => "レビュー済",
+        }
+    }
 }
 
 /// stacked PR の中での位置. main に近い側から 1 始まりで数える.
@@ -113,13 +143,36 @@ impl Pr {
             threads_total: 0,
             threads_open: 0,
             behind_main: None,
+            my_review: None,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Pr;
+    use super::{MyReview, Pr, ReviewerState};
+
+    #[test]
+    fn my_review_label() {
+        let label = |requested, last| {
+            MyReview {
+                requested,
+                last,
+                via_teams: vec![],
+            }
+            .label()
+        };
+        assert_eq!(label(true, None), "依頼中");
+        assert_eq!(label(true, Some(ReviewerState::Approved)), "再依頼");
+        assert_eq!(label(true, Some(ReviewerState::Commented)), "再依頼");
+        assert_eq!(label(false, Some(ReviewerState::Approved)), "承認済");
+        assert_eq!(
+            label(false, Some(ReviewerState::ChangesRequested)),
+            "変更要求"
+        );
+        assert_eq!(label(false, Some(ReviewerState::Commented)), "コメント済");
+        assert_eq!(label(false, None), "レビュー済");
+    }
 
     #[test]
     fn conflicting_only_when_mergeable_is_conflicting() {

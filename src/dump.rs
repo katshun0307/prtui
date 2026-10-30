@@ -65,5 +65,26 @@ pub fn run(dir: PathBuf, repo: &str) -> Result<()> {
             p.title,
         );
     }
+    // レビュータブ. 失敗しても自分の PR は出したので続けない
+    println!("# review");
+    for p in gh::fetch_reviews(&dir, repo)? {
+        let mine = p.my_review.as_ref();
+        let teams = mine.map_or(String::new(), |m| m.via_teams.join(","));
+        let devin = session_for(&sessions, &p.url)
+            .map_or("-".into(), |(s, n)| ui::format::devin_label(s, n));
+        println!(
+            "#{}\tauthor={}\tme={}\tvia={}\tdraft={}\tthreads={}/{}\tlocal={}\tdevin={devin}\t{}\t{}",
+            p.number,
+            p.author,
+            mine.map_or("-", |m| m.label()),
+            if teams.is_empty() { "-" } else { &teams },
+            p.is_draft,
+            p.threads_open,
+            p.threads_total,
+            local.sync_label(&p).unwrap_or("-"),
+            ui::format::ago(p.updated_at),
+            p.title,
+        );
+    }
     Ok(())
 }

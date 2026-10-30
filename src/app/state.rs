@@ -53,56 +53,54 @@ impl ChatView {
     }
 }
 
-pub struct AppState {
-    pub dir: PathBuf,
-    pub repo: String,
+/// 一覧のタブ
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Tab {
+    /// 自分が author か assignee の PR
+    #[default]
+    Mine,
+    /// 自分にレビューが依頼されているか, 自分がレビューした PR
+    Review,
+}
+
+impl Tab {
+    pub const ALL: [Tab; 2] = [Tab::Mine, Tab::Review];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Tab::Mine => "自分",
+            Tab::Review => "レビュー",
+        }
+    }
+
+    pub fn next(self) -> Tab {
+        match self {
+            Tab::Mine => Tab::Review,
+            Tab::Review => Tab::Mine,
+        }
+    }
+}
+
+/// タブ 1 つ分の一覧. 取得, 選択位置, 絞り込みはタブごとに持つ
+#[derive(Default)]
+pub struct PrList {
     pub prs: Vec<Pr>,
-    pub local: LocalState,
-    pub draft_only: bool,
     pub table: TableState,
-    pub message: Option<Message>,
+    pub draft_only: bool,
     pub loading: bool,
-    pub busy: Option<String>,
-    /// base 取り込みの確認待ちの PR 番号と base ブランチ名
-    pub confirm_update: Option<(u64, String)>,
-    /// 2 回目のキー入力待ちの状態変更 (draft, close)
-    pub confirm_op: Option<(u64, PrOp)>,
-    pub last_fetch: Option<Instant>,
     /// `prs` の全件を取得した時刻. キャッシュから読んだときはキャッシュを書いた時刻
     pub fetched_at: Option<DateTime<Utc>>,
     /// `prs` がキャッシュのままで, 起動後の取得がまだ終わっていない
     pub from_cache: bool,
-    /// 操作の反映を待って取り直している PR 番号
-    pub syncing: HashSet<u64>,
-    /// repo の Devin session. Devin を設定していなければ空
-    pub devin_sessions: Vec<DevinSession>,
-    /// Devin session 一覧を取得中. PR の取得 (`loading`) とは独立
-    pub sessions_loading: bool,
-    /// 会話ビューを開いていれば Some
-    pub chat: Option<ChatView>,
+    /// 直近の取得の失敗. このタブの一覧の上に出す
+    pub error: Option<String>,
 }
 
-impl AppState {
-    pub fn new(dir: PathBuf, repo: String, local: LocalState) -> Self {
+impl PrList {
+    fn new() -> Self {
         Self {
-            dir,
-            repo,
-            prs: Vec::new(),
-            local,
-            draft_only: false,
             table: TableState::default().with_selected(0),
-            message: None,
-            loading: false,
-            busy: None,
-            confirm_update: None,
-            confirm_op: None,
-            last_fetch: None,
-            fetched_at: None,
-            from_cache: false,
-            syncing: HashSet::new(),
-            devin_sessions: Vec::new(),
-            sessions_loading: false,
-            chat: None,
+            ..Default::default()
         }
     }
 
@@ -118,23 +116,8 @@ impl AppState {
         self.visible().get(i).copied()
     }
 
-    pub fn pr(&self, n: u64) -> Option<&Pr> {
-        self.prs.iter().find(|p| p.number == n)
-    }
-
-    /// 会話ビューで開いている session
-    pub fn chat_session(&self) -> Option<&DevinSession> {
-        let id = &self.chat.as_ref()?.session_id;
-        self.devin_sessions.iter().find(|s| &s.id == id)
-    }
-
-    /// PR に紐づく最新の Devin session と件数
-    pub fn devin_for(&self, pr: &Pr) -> Option<(&DevinSession, usize)> {
-        session_for(&self.devin_sessions, &pr.url)
-    }
-
     /// 一覧を差し替える. 並びが変わっても同じ PR を選んだままにする
-    pub fn replace_prs(&mut self, prs: Vec<Pr>) {
+    pub fn replace(&mut self, prs: Vec<Pr>) {
         let sel = self.selected().map(|p| p.number);
         self.prs = prs;
         if let Some(i) = sel.and_then(|n| self.visible().iter().position(|p| p.number == n)) {
@@ -157,6 +140,96 @@ impl AppState {
         let len = self.visible().len();
         let cur = self.table.selected().unwrap_or(0);
         self.table.select(Some(cur.min(len.saturating_sub(1))));
+    }
+}
+
+pub struct AppState {
+    pub dir: PathBuf,
+    pub repo: String,
+    pub tab: Tab,
+    /// 自分タブ. 操作 (u, O, DD, XX, RR) と 1 件の取り直しはこちらだけが対象
+    pub mine: PrList,
+    pub review: PrList,
+    pub local: LocalState,
+    pub message: Option<Message>,
+    pub busy: Option<String>,
+    /// base 取り込みの確認待ちの PR 番号と base ブランチ名
+    pub confirm_update: Option<(u64, String)>,
+    /// 2 回目のキー入力待ちの状態変更 (draft, close)
+    pub confirm_op: Option<(u64, PrOp)>,
+    pub last_fetch: Option<Instant>,
+    /// 操作の反映を待って取り直している PR 番号
+    pub syncing: HashSet<u64>,
+    /// repo の Devin session. Devin を設定していなければ空
+    pub devin_sessions: Vec<DevinSession>,
+    /// Devin session 一覧を取得中. PR の取得 (`loading`) とは独立
+    pub sessions_loading: bool,
+    /// 会話ビューを開いていれば Some
+    pub chat: Option<ChatView>,
+}
+
+impl AppState {
+    pub fn new(dir: PathBuf, repo: String, local: LocalState) -> Self {
+        Self {
+            dir,
+            repo,
+            tab: Tab::Mine,
+            mine: PrList::new(),
+            review: PrList::new(),
+            local,
+            message: None,
+            busy: None,
+            confirm_update: None,
+            confirm_op: None,
+            last_fetch: None,
+            syncing: HashSet::new(),
+            devin_sessions: Vec::new(),
+            sessions_loading: false,
+            chat: None,
+        }
+    }
+
+    pub fn list(&self) -> &PrList {
+        self.list_of(self.tab)
+    }
+
+    pub fn list_mut(&mut self) -> &mut PrList {
+        match self.tab {
+            Tab::Mine => &mut self.mine,
+            Tab::Review => &mut self.review,
+        }
+    }
+
+    pub fn list_of(&self, tab: Tab) -> &PrList {
+        match tab {
+            Tab::Mine => &self.mine,
+            Tab::Review => &self.review,
+        }
+    }
+
+    pub fn visible(&self) -> Vec<&Pr> {
+        self.list().visible()
+    }
+
+    /// 今のタブで選択中の PR
+    pub fn selected(&self) -> Option<&Pr> {
+        self.list().selected()
+    }
+
+    /// 自分タブの PR. 操作の対象を番号で引く
+    pub fn pr(&self, n: u64) -> Option<&Pr> {
+        self.mine.prs.iter().find(|p| p.number == n)
+    }
+
+    /// 会話ビューで開いている session
+    pub fn chat_session(&self) -> Option<&DevinSession> {
+        let id = &self.chat.as_ref()?.session_id;
+        self.devin_sessions.iter().find(|s| &s.id == id)
+    }
+
+    /// PR に紐づく最新の Devin session と件数
+    pub fn devin_for(&self, pr: &Pr) -> Option<(&DevinSession, usize)> {
+        session_for(&self.devin_sessions, &pr.url)
     }
 
     pub fn info(&mut self, text: String) {

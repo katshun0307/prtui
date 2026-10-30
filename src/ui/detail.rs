@@ -42,6 +42,14 @@ pub(super) fn detail_view(state: &AppState) -> Paragraph<'static> {
         ]),
         Line::from(reviewer_spans(p)),
     ];
+    if let Some(teams) = p.my_review.as_ref().map(|m| &m.via_teams)
+        && !teams.is_empty()
+    {
+        lines.push(Line::from(vec![
+            Span::raw("依頼: ").fg(DIM),
+            Span::raw(format!("{} 経由", teams.join(", "))).yellow(),
+        ]));
+    }
     let failed = check_names(p, CheckState::Failure);
     if !failed.is_empty() {
         lines.push(Line::from(vec![

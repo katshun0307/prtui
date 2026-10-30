@@ -1,18 +1,45 @@
 use ratatui::Frame;
 use ratatui::layout::Constraint;
-use ratatui::style::{Modifier, Style, Stylize};
+use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Row, Table};
 
 use super::format::{ago, devin_label};
 use super::{DIM, HEADER_FG, SELECTED_BG, devin_style};
-use crate::app::AppState;
+use crate::app::{AppState, Tab};
 use crate::domain::devin::DevinSession;
 use crate::domain::local::LocalState;
-use crate::domain::pr::{CheckState, Pr, ReviewerState};
+use crate::domain::pr::{CheckState, MyReview, Pr, ReviewerState};
 
 pub(super) fn draw_table(f: &mut Frame, state: &mut AppState, area: ratatui::layout::Rect) {
-    let rows: Vec<Row> = state
+    let (header, widths, rows) = match state.tab {
+        Tab::Mine => mine_rows(state),
+        Tab::Review => review_rows(state),
+    };
+    let title = table_title(state, rows.len());
+    let table = Table::new(rows, widths)
+        .header(
+            Row::new(header).style(
+                Style::new()
+                    .fg(HEADER_FG)
+                    .add_modifier(Modifier::UNDERLINED),
+            ),
+        )
+        .block(
+            Block::new()
+                .borders(Borders::TOP)
+                .border_style(Style::new().fg(DIM))
+                .title(title),
+        )
+        .row_highlight_style(Style::new().bg(SELECTED_BG))
+        .highlight_symbol(Span::raw("▶ ").cyan().bold());
+    f.render_stateful_widget(table, area, &mut state.list_mut().table);
+}
+
+type Columns<'a> = (Vec<&'static str>, Vec<Constraint>, Vec<Row<'a>>);
+
+fn mine_rows(state: &AppState) -> Columns<'static> {
+    let rows = state
         .visible()
         .into_iter()
         .map(|p| {
@@ -33,65 +60,128 @@ pub(super) fn draw_table(f: &mut Frame, state: &mut AppState, area: ratatui::lay
             ])
         })
         .collect();
-    let count = rows.len();
+    let header = vec![
+        "#",
+        "Stack",
+        "状態",
+        "CI",
+        "未解決",
+        "main",
+        "差分",
+        "Review",
+        "Reviewer",
+        "Local",
+        "Devin",
+        "更新",
+        "タイトル",
+    ];
+    let widths = vec![
+        Constraint::Length(6),
+        Constraint::Length(5),
+        Constraint::Length(8),
+        Constraint::Length(7),
+        Constraint::Length(6),
+        Constraint::Length(5),
+        Constraint::Length(12),
+        Constraint::Length(9),
+        Constraint::Length(10),
+        Constraint::Length(10),
+        Constraint::Length(11),
+        Constraint::Length(4),
+        Constraint::Fill(1),
+    ];
+    (header, widths, rows)
+}
+
+/// レビュータブ. 他人の PR なので main 取り込みの要否と stack は出さず, author と自分の立場を出す
+fn review_rows(state: &AppState) -> Columns<'static> {
+    let rows = state
+        .visible()
+        .into_iter()
+        .map(|p| {
+            Row::new(vec![
+                Cell::from(format!("#{}", p.number)),
+                state_cell(p),
+                ci_cell(p),
+                threads_cell(p),
+                size_cell(p),
+                Cell::from(p.author.clone()),
+                my_review_cell(p),
+                reviewer_cell(p),
+                local_cell(&state.local, p),
+                Cell::from(devin_span(state.devin_for(p))),
+                Cell::from(ago(p.updated_at)).fg(DIM),
+                Cell::from(p.title.clone()),
+            ])
+        })
+        .collect();
+    let header = vec![
+        "#",
+        "状態",
+        "CI",
+        "未解決",
+        "差分",
+        "Author",
+        "自分",
+        "Reviewer",
+        "Local",
+        "Devin",
+        "更新",
+        "タイトル",
+    ];
+    let widths = vec![
+        Constraint::Length(6),
+        Constraint::Length(8),
+        Constraint::Length(7),
+        Constraint::Length(6),
+        Constraint::Length(12),
+        Constraint::Length(14),
+        Constraint::Length(10),
+        Constraint::Length(10),
+        Constraint::Length(10),
+        Constraint::Length(11),
+        Constraint::Length(4),
+        Constraint::Fill(1),
+    ];
+    (header, widths, rows)
+}
+
+/// ` PR n 件 (更新中…) `. 取得に失敗していれば赤でエラーを足す
+fn table_title(state: &AppState, count: usize) -> Line<'static> {
+    let list = state.list();
     let mut syncing: Vec<_> = state.syncing.iter().map(|n| format!("#{n}")).collect();
     syncing.sort();
-    let title = if state.loading {
+    let text = if list.loading {
         format!(" PR {count} 件 (更新中…) ")
-    } else if !syncing.is_empty() {
+    } else if state.tab == Tab::Mine && !syncing.is_empty() {
         format!(" PR {count} 件 ({} を同期中…) ", syncing.join(" "))
     } else {
         format!(" PR {count} 件 ")
     };
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(6),
-            Constraint::Length(5),
-            Constraint::Length(8),
-            Constraint::Length(7),
-            Constraint::Length(6),
-            Constraint::Length(5),
-            Constraint::Length(12),
-            Constraint::Length(9),
-            Constraint::Length(10),
-            Constraint::Length(10),
-            Constraint::Length(11),
-            Constraint::Length(4),
-            Constraint::Fill(1),
-        ],
-    )
-    .header(
-        Row::new([
-            "#",
-            "Stack",
-            "状態",
-            "CI",
-            "未解決",
-            "main",
-            "差分",
-            "Review",
-            "Reviewer",
-            "Local",
-            "Devin",
-            "更新",
-            "タイトル",
-        ])
-        .style(
-            Style::new()
-                .fg(HEADER_FG)
-                .add_modifier(Modifier::UNDERLINED),
-        ),
-    )
-    .block(
-        Block::new()
-            .borders(Borders::TOP)
-            .border_style(Style::new().fg(DIM))
-            .title(title),
-    )
-    .row_highlight_style(Style::new().bg(SELECTED_BG))
-    .highlight_symbol(Span::raw("▶ ").cyan().bold());
-    f.render_stateful_widget(table, area, &mut state.table);
+    let mut spans = vec![Span::raw(text)];
+    if let Some(e) = &list.error {
+        spans.push(Span::raw(format!("{e} ")).red());
+    }
+    Line::from(spans)
+}
+
+fn my_review_cell(p: &Pr) -> Cell<'static> {
+    match &p.my_review {
+        Some(m) => Cell::from(m.label()).fg(my_review_color(m)),
+        None => Cell::from(""),
+    }
+}
+
+/// 依頼中と再依頼は自分の対応が要るので yellow. レビュー済みは最新のレビューの色
+fn my_review_color(m: &MyReview) -> Color {
+    if m.requested {
+        return Color::Yellow;
+    }
+    match m.last {
+        Some(ReviewerState::Approved) => Color::Green,
+        Some(ReviewerState::ChangesRequested) => Color::Red,
+        _ => DIM,
+    }
 }
 
 /// stack 内の位置 `段/段数`. main に近い側が 1. stack に入っていなければ空
@@ -239,6 +329,23 @@ mod tests {
         assert_eq!(span.style.fg, Some(Color::Cyan));
         let span = devin_span(Some((&s, 3)));
         assert_eq!(span.content, "suspended×3");
+    }
+
+    #[test]
+    fn my_review_cell_color() {
+        let fg = |requested, last| {
+            my_review_color(&MyReview {
+                requested,
+                last,
+                via_teams: vec![],
+            })
+        };
+        assert_eq!(fg(true, None), Color::Yellow);
+        assert_eq!(fg(true, Some(ReviewerState::Approved)), Color::Yellow);
+        assert_eq!(fg(false, Some(ReviewerState::Approved)), Color::Green);
+        assert_eq!(fg(false, Some(ReviewerState::ChangesRequested)), Color::Red);
+        assert_eq!(fg(false, Some(ReviewerState::Commented)), DIM);
+        assert_eq!(fg(false, None), DIM);
     }
 
     #[test]

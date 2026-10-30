@@ -5,8 +5,11 @@ use anyhow::{Context, Result};
 use crate::domain::linear::{REVIEW_LINK_MARK, extract_review_url};
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
+use crate::domain::review::arrange_reviews;
 use crate::domain::stack::arrange;
-use crate::infra::graphql::{FRAGMENT, QUERY, QUERY_ONE, parse_one, parse_search};
+use crate::infra::graphql::{
+    FRAGMENT, QUERY, QUERY_ONE, QUERY_REVIEW, parse_one, parse_review, parse_search,
+};
 use crate::infra::process::run;
 
 pub fn repo_name(dir: &Path) -> Result<String> {
@@ -44,6 +47,27 @@ pub fn fetch_prs(dir: &Path, repo: &str) -> Result<Vec<Pr>> {
     )?;
     let prs = parse_search(&out)?;
     Ok(arrange(prs))
+}
+
+/// repo の open PR のうち, 自分にレビューが依頼されている (チーム経由を含む) か,
+/// 自分がレビューしたものを返す. 自分が author の PR は除く. 依頼中を先に並べる.
+pub fn fetch_reviews(dir: &Path, repo: &str) -> Result<Vec<Pr>> {
+    let base = format!("repo:{repo} is:pr is:open -author:@me");
+    let out = run(
+        dir,
+        "gh",
+        &[
+            "api",
+            "graphql",
+            "-f",
+            &format!("query={QUERY_REVIEW}{FRAGMENT}"),
+            "-f",
+            &format!("requested={base} review-requested:@me"),
+            "-f",
+            &format!("reviewed={base} reviewed-by:@me"),
+        ],
+    )?;
+    Ok(arrange_reviews(parse_review(&out)?))
 }
 
 /// PR を 1 件だけ取り直す. open でなくなっていれば None.

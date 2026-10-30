@@ -8,6 +8,8 @@ use crate::domain::review::review_targets;
 /// スレッドで実行した処理の結果
 pub enum Event {
     Fetched(Result<Vec<Pr>>),
+    /// レビュータブの全件
+    FetchedReviews(Result<Vec<Pr>>),
     CheckedOut(u64, Result<String>),
     /// 成功時は取り込んだ base ブランチ名
     UpdatedBranch(u64, Result<String>),
@@ -41,6 +43,8 @@ pub enum Effect {
     Suspend(Vec<String>),
     /// 全件取得をスレッドで行い, LocalState を同期で読み直す
     Fetch,
+    /// レビュータブの全件取得をスレッドで行う. 自分タブの取得とは独立
+    FetchReviews,
     /// LocalState を同期で読み直す
     ReloadLocal,
     /// 現在の一覧をキャッシュに書く

@@ -28,6 +28,13 @@
   - 会話ビュー (`v`): 全画面でメッセージを古い順に並べる (Devin は magenta, 自分側は cyan). 開いている間は 5 秒おきに取り直し, 末尾を見ていれば追従する. `j`/`k`, `Ctrl-d`/`Ctrl-u`, `g`/`G` でスクロール. `i` で 1 行入力 (Enter 送信, Esc でやめる), `e` で TUI を止めて `${VISUAL:-${EDITOR:-vi}}` を開き, 0 で終われば送信する (非 0 は取りやめ). `o` で session を Devin の web で開く. `r` ですぐ取り直す. `Esc`/`q` で一覧に戻る (送信中は無視)
   - 送信は status で制限しない (suspended は送信で再開する). API のエラー (409 / 410 など) は会話ビューのフッターに出す. 書きかけは送信が成功するまで残し, 失敗後に `i` か `e` で直せる
   - HTTP は crate を足さず `curl` を呼ぶ. token は argv に載せず `curl --config -` で stdin から渡す (`ps` に出さないため)
+- レビュータブ: 自分がレビューを依頼された PR とレビューした PR を別タブに並べる (2026-10-30 追加. 仕様はユーザーと質疑で決めた)
+  - 対象: open PR のうち `review-requested:@me` か `reviewed-by:@me` に当たるもの. どちらも `-author:@me` を付けて自分の PR を除く. `review-requested` はチーム宛ての依頼も拾う (`user-review-requested` にしなかったのはユーザーの選択). `reviewed-by` はコメントだけ残した PR も拾う. Draft も出す
+  - 取得: `QUERY_REVIEW` で 2 つの alias と `viewer { login }` を 1 リクエストで取り, 依頼中側を先に見て番号で重複を除く. 自分タブとは別スレッドで, 取るのは同じタイミング (起動時, 5 分ごと, `r`). 失敗は一覧のタイトルに赤で出し, フッターには出さない. キャッシュは同じファイルの `reviews` に取得時刻と一緒に入れる
+  - 切り替え: `Tab` / `Shift-Tab` と `1` / `2`. ヘッダに `1 自分 (n)  2 レビュー (m)` を出し, 今のタブを反転する. 選択位置と `t` の絞り込みはタブごとに持つ. 切り替えるとフッターのメッセージを消す
+  - 自分の立場 (`MyReview`): 依頼中の検索に当たれば requested. `latestReviews` から自分 (大文字小文字を無視) の最新のレビューを取る. 依頼中かつレビュー済みなら「再依頼」. `reviewRequests` に自分の login が無ければチーム経由とみなし, PR に依頼されているチームの slug を詳細欄に `依頼: <team> 経由` で出す. 自分の所属チームは取っていないので, 関係ないチームも混ざりうる
+  - 並び: 依頼中 (再依頼を含む) を先に, その中とレビュー済みの中はそれぞれ更新日時の降順. stack はまとめない
+  - 操作: `Enter`/`c`, `d`, `o`, `l`, `L`, `v`, `t`, `r` は使える. 他人の PR を変える `u` / `O` / `DD` / `XX` / `RR` は無効にし, `<key> はレビュータブでは使えない` を出す (ユーザーの指定)
 - 実装: Rust (edition 2024), ratatui 0.30 (crossterm は `ratatui::crossterm` の re-export を使う), serde, anyhow, chrono. GitHub と git は `gh` と `git` コマンドを `std::process::Command` で呼ぶ. 非同期 runtime は使わず, 時間のかかる処理はスレッド + mpsc で UI をブロックしない
 
 ## 構成
@@ -38,14 +45,14 @@
 |---|---|
 | `src/main.rs` | 引数処理 (`-C`, `--dump`), 端末初期化, イベントループ, 外部コマンド実行時の TUI 一時停止 |
 | `src/dump.rs` | `--dump` のテキスト出力 |
-| `src/domain/` | 純粋な型と関数. `pr.rs` (`Pr`), `stack.rs` (`arrange`, `group_stacks`), `review.rs` (`review_targets`), `linear.rs` (issue キーと review URL の抽出), `local.rs` (`LocalState`, `parse_reviewers`), `op.rs` (`PrOp`), `devin.rs` (Devin の型と `session_for`) |
+| `src/domain/` | 純粋な型と関数. `pr.rs` (`Pr`, `MyReview`), `stack.rs` (`arrange`, `group_stacks`), `review.rs` (`review_targets`, `arrange_reviews`), `linear.rs` (issue キーと review URL の抽出), `local.rs` (`LocalState`, `parse_reviewers`), `op.rs` (`PrOp`), `devin.rs` (Devin の型と `session_for`) |
 | `src/infra/process.rs` | コマンド実行ヘルパ `run`, `open_url` |
 | `src/infra/git.rs` | メイン worktree の解決 `main_worktree`, `read_local_state` (現在ブランチ, dirty, refs/heads の oid, git config) |
-| `src/infra/gh.rs` | gh コマンド. 全件取得 `fetch_prs` と 1 件取得 `fetch_pr`, `update_branch`, `checkout`, `change_state`, `view_web`, `linear_review_url` |
-| `src/infra/graphql.rs` | GraphQL クエリ, `Raw*` 型と `Pr` への変換, JSON の解析 `parse_search` / `parse_one` |
+| `src/infra/gh.rs` | gh コマンド. 全件取得 `fetch_prs`, レビュータブの `fetch_reviews`, 1 件取得 `fetch_pr`, `update_branch`, `checkout`, `change_state`, `view_web`, `linear_review_url` |
+| `src/infra/graphql.rs` | GraphQL クエリ, `Raw*` 型と `Pr` への変換, JSON の解析 `parse_search` / `parse_review` / `parse_one` |
 | `src/infra/devin.rs` | Devin API v3 (`fetch_sessions`, `fetch_messages`, `send_message`) を curl で呼ぶ. JSON の解析 `parse_*` |
 | `src/infra/cache.rs` | PR 一覧と Devin session 一覧のディスクキャッシュの読み書き |
-| `src/app/state.rs` | 全状態 `AppState` と会話ビューの `ChatView` |
+| `src/app/state.rs` | 全状態 `AppState`, タブ `Tab` とタブごとの一覧 `PrList`, 会話ビューの `ChatView` |
 | `src/app/event.rs` | `Event` (スレッドの結果), `Effect` (副作用の要求), `Action` (main への指示), `WatchUntil` |
 | `src/app/update.rs` | キー操作, イベント処理, 時間の遷移 (`tick`). `AppState` を更新して `Vec<Effect>` を返す純粋関数 |
 | `src/app/runtime.rs` | `App`. Effect を実行し, スレッドの起動と infra の呼び出しをここに閉じる |
@@ -69,6 +76,8 @@ refactor 前は 1 つの `App` に状態, キー判断, スレッド起動, gh �
 - Devin: PR に紐づく最新の Devin session の status. 複数なら `×n`. Devin を設定していなければ空
 
 ## 確認済み
+
+- 2026-10-30: レビュータブを追加. clippy 0 件, fmt 通過, `cargo test` 98 件通過. 検証用 repo で `--dump` の `# review` に依頼中 2 件と承認済 2 件が依頼中を先にして出ること, tmux で `Tab` / `1` / `2` の切り替え, レビュータブの列, `u` のエラー表示, 再起動後にキャッシュから `(キャッシュ)` 付きで出ることを確認
 
 - `cargo clippy --all-targets` の警告 0 件, `cargo fmt --check` 通過
 - `--dump` で 検証用 repo の実 PR 28 件と main 列が取れる
@@ -97,6 +106,8 @@ refactor 前は 1 つの `App` に状態, キー判断, スレッド起動, gh �
 
 ## 未確認
 
+- レビュータブの「再依頼」, 「変更要求」, チーム経由の表示. 検証用 repo に該当する PR が無かったので, `parse_review` の単体テストでだけ確かめた
+
 - Devin API を正しい token で叩くこと全般. 特に次の 4 点
   - 時刻の単位 (秒と仮定し, 1e12 を超えれば ms とみなしている)
   - `repo_names` が 1 値の query で効くか
@@ -119,6 +130,6 @@ refactor 前は 1 つの `App` に状態, キー判断, スレッド起動, gh �
 - `差分あり` はローカルが遅れているのか進んでいるのかを区別しない
 - `o` (`gh pr view --web`) は UI スレッドで同期実行している
 - stacked PR の main 列は main との差なので, 親の変更を取り込めているかは分からない
-- PR が 100 件を超えると search の `first:100` で切れる
+- PR が 100 件を超えると search の `first:100` で切れる. レビュータブの `reviewed-by:@me` は close されるまで残るので, 長く open のままの PR が溜まりうる
 - Devin session は直近 30 日に更新されたもので, 最大 1000 件しか見ない. それより古い session の PR は Devin 列が空になる
 - 詳細欄は高さ 10 で固定. CI の失敗と実行中の行と devin 行が全部出ると URL の行が欄からはみ出ることがある

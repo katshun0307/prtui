@@ -16,6 +16,9 @@ pub struct Cache {
     /// 前回取得した Devin session. Devin を設定していなければ空
     #[serde(default)]
     pub devin_sessions: Vec<DevinSession>,
+    /// レビュータブの PR 一覧と, それを取得した時刻. 未取得なら None
+    #[serde(default)]
+    pub reviews: Option<(DateTime<Utc>, Vec<Pr>)>,
 }
 
 /// `$XDG_CACHE_HOME/prtui/<owner>__<name>.json`. XDG_CACHE_HOME が無ければ `~/.cache`.

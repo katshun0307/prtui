@@ -7,7 +7,7 @@ use chrono::Utc;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::event::{Effect, Event, WatchUntil};
-use super::state::{AppState, ChatView};
+use super::state::{AppState, ChatView, Tab};
 use crate::domain::linear::linear_issue_key;
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
@@ -19,14 +19,18 @@ pub const AUTO_REFRESH: Duration = Duration::from_secs(300);
 /// 会話ビューを開いている間にメッセージを取り直す間隔
 pub const CHAT_POLL: Duration = Duration::from_secs(5);
 
-/// 全件を取り直す. 取得中なら何もしない.
-/// Devin を設定していれば session 一覧も取り直す. PR の取得とは独立に走らせる
+/// 両タブの全件を取り直す. 取得中のタブは飛ばす.
+/// Devin を設定していれば session 一覧も取り直す. それぞれ独立に走らせる
 pub fn refresh(state: &mut AppState) -> Vec<Effect> {
     let mut effects = vec![];
-    if !state.loading {
-        state.loading = true;
-        state.last_fetch = Some(Instant::now());
+    state.last_fetch = Some(Instant::now());
+    if !state.mine.loading {
+        state.mine.loading = true;
         effects.push(Effect::Fetch);
+    }
+    if !state.review.loading {
+        state.review.loading = true;
+        effects.push(Effect::FetchReviews);
     }
     if state.local.devin.is_some() && !state.sessions_loading {
         state.sessions_loading = true;
@@ -61,16 +65,34 @@ pub fn tick(state: &mut AppState, now: Instant) -> Vec<Effect> {
 pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
     match ev {
         Event::Fetched(res) => {
-            state.loading = false;
+            state.mine.loading = false;
             match res {
                 Ok(prs) => {
-                    state.fetched_at = Some(Utc::now());
-                    state.from_cache = false;
-                    state.replace_prs(prs);
+                    state.mine.fetched_at = Some(Utc::now());
+                    state.mine.from_cache = false;
+                    state.mine.replace(prs);
                     vec![Effect::SaveCache]
                 }
                 Err(e) => {
                     state.error(format!("取得失敗: {e}"));
+                    vec![]
+                }
+            }
+        }
+        // 失敗はフッターではなくレビュータブの一覧に出し, 自分タブの表示を邪魔しない
+        Event::FetchedReviews(res) => {
+            let list = &mut state.review;
+            list.loading = false;
+            match res {
+                Ok(prs) => {
+                    list.fetched_at = Some(Utc::now());
+                    list.from_cache = false;
+                    list.error = None;
+                    list.replace(prs);
+                    vec![Effect::SaveCache]
+                }
+                Err(e) => {
+                    list.error = Some(format!("取得失敗: {e}"));
                     vec![]
                 }
             }
@@ -81,13 +103,14 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
                 Ok(pr) => {
                     // drain すると replace_prs が選択中の PR を引けなくなるので複製する
                     let mut prs: Vec<Pr> = state
+                        .mine
                         .prs
                         .iter()
                         .filter(|p| p.number != n)
                         .cloned()
                         .collect();
                     prs.extend(pr);
-                    state.replace_prs(arrange(prs));
+                    state.mine.replace(arrange(prs));
                     vec![Effect::SaveCache]
                 }
                 Err(e) => {
@@ -256,28 +279,38 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         state.info(format!("#{n} の {} を取りやめた", op.label()));
         return vec![];
     }
+    if state.tab == Tab::Review
+        && let KeyCode::Char(c @ ('u' | 'O' | 'D' | 'X' | 'R')) = key.code
+    {
+        state.error(format!("{c} はレビュータブでは使えない"));
+        return vec![];
+    }
     match key.code {
         KeyCode::Char('q') | KeyCode::Esc => vec![Effect::Quit],
+        KeyCode::Tab | KeyCode::BackTab => switch_tab(state, state.tab.next()),
+        KeyCode::Char('1') => switch_tab(state, Tab::Mine),
+        KeyCode::Char('2') => switch_tab(state, Tab::Review),
         KeyCode::Char('u') => request_update(state),
         KeyCode::Char('O') => request_state(state, PrOp::Open),
         KeyCode::Char('D') => request_state(state, PrOp::Draft),
         KeyCode::Char('X') => request_state(state, PrOp::Close),
         KeyCode::Char('R') => request_state(state, PrOp::Review),
         KeyCode::Char('j') | KeyCode::Down => {
-            state.move_by(1);
+            state.list_mut().move_by(1);
             vec![]
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            state.move_by(-1);
+            state.list_mut().move_by(-1);
             vec![]
         }
         KeyCode::Char('g') | KeyCode::Home => {
-            state.table.select(Some(0));
+            state.list_mut().table.select(Some(0));
             vec![]
         }
         KeyCode::Char('G') | KeyCode::End => {
-            let len = state.visible().len();
-            state.table.select(Some(len.saturating_sub(1)));
+            let list = state.list_mut();
+            let len = list.visible().len();
+            list.table.select(Some(len.saturating_sub(1)));
             vec![]
         }
         KeyCode::Char('r') => {
@@ -285,8 +318,9 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
             refresh(state)
         }
         KeyCode::Char('t') => {
-            state.draft_only = !state.draft_only;
-            state.clamp_selection();
+            let list = state.list_mut();
+            list.draft_only = !list.draft_only;
+            list.clamp_selection();
             vec![]
         }
         KeyCode::Enter | KeyCode::Char('c') => checkout(state),
@@ -312,6 +346,15 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
             .collect(),
         _ => vec![],
     }
+}
+
+/// タブを切り替える. 前のタブのメッセージは今のタブの PR と関係ないので消す
+fn switch_tab(state: &mut AppState, tab: Tab) -> Vec<Effect> {
+    if state.tab != tab {
+        state.tab = tab;
+        state.message = None;
+    }
+    vec![]
 }
 
 /// 選択中の PR に紐づく最新の Devin session の会話ビューを開く.
@@ -560,7 +603,7 @@ mod tests {
 
     use super::{AUTO_REFRESH, CHAT_POLL, handle_event, handle_key, refresh, tick};
     use crate::app::event::{Effect, Event, WatchUntil};
-    use crate::app::state::{AppState, ChatView};
+    use crate::app::state::{AppState, ChatView, Tab};
     use crate::domain::devin::{DevinConfig, DevinSession};
     use crate::domain::local::LocalState;
     use crate::domain::op::PrOp;
@@ -568,7 +611,7 @@ mod tests {
 
     fn state(prs: Vec<Pr>) -> AppState {
         let mut s = AppState::new(PathBuf::from("/tmp"), "o/r".into(), LocalState::default());
-        s.prs = prs;
+        s.mine.prs = prs;
         s
     }
 
@@ -721,28 +764,108 @@ mod tests {
         );
     }
 
+    fn review_state(mine: Vec<Pr>, reviews: Vec<Pr>) -> AppState {
+        let mut s = state(mine);
+        s.review.prs = reviews;
+        s
+    }
+
+    #[test]
+    fn tab_switch_keeps_selection_per_tab() {
+        let mut s = review_state(vec![pr(1), pr(2)], vec![pr(10), pr(11), pr(12)]);
+        handle_key(&mut s, key('j'));
+        assert_eq!(s.selected().map(|p| p.number), Some(2));
+
+        handle_key(&mut s, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(s.tab, Tab::Review);
+        assert_eq!(s.selected().map(|p| p.number), Some(10));
+        handle_key(&mut s, key('G'));
+        assert_eq!(s.selected().map(|p| p.number), Some(12));
+
+        handle_key(&mut s, key('1'));
+        assert_eq!(s.tab, Tab::Mine);
+        assert_eq!(s.selected().map(|p| p.number), Some(2));
+        handle_key(&mut s, KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+        assert_eq!(s.selected().map(|p| p.number), Some(12));
+        handle_key(&mut s, key('2'));
+        assert_eq!(s.tab, Tab::Review);
+    }
+
+    #[test]
+    fn draft_filter_is_per_tab() {
+        let mut d = pr(11);
+        d.is_draft = true;
+        let mut s = review_state(vec![pr(1)], vec![pr(10), d]);
+        handle_key(&mut s, key('2'));
+        handle_key(&mut s, key('t'));
+        assert!(s.review.draft_only && !s.mine.draft_only);
+        assert_eq!(s.selected().map(|p| p.number), Some(11));
+    }
+
+    #[test]
+    fn review_tab_rejects_mutating_ops() {
+        let mut s = review_state(vec![], vec![pr(10)]);
+        s.local.reviewers = vec!["alice".into()];
+        handle_key(&mut s, key('2'));
+        for c in ['u', 'O', 'D', 'X', 'R'] {
+            assert!(handle_key(&mut s, key(c)).is_empty(), "{c}");
+            assert_eq!(
+                message(&s),
+                (&*format!("{c} はレビュータブでは使えない"), true)
+            );
+            assert!(s.confirm_op.is_none() && s.confirm_update.is_none());
+        }
+    }
+
+    #[test]
+    fn review_tab_allows_browsing_ops() {
+        let mut s = review_state(vec![pr(1)], vec![pr(10)]);
+        handle_key(&mut s, key('2'));
+        assert_eq!(handle_key(&mut s, key('c')), vec![Effect::Checkout(10)]);
+        assert_eq!(handle_key(&mut s, key('o')), vec![Effect::ViewWeb(10)]);
+        assert_eq!(handle_key(&mut s, key('L')), vec![Effect::LinearReview(10)]);
+    }
+
+    #[test]
+    fn fetched_reviews_error_stays_in_review_tab() {
+        let mut s = review_state(vec![], vec![pr(10)]);
+        s.review.loading = true;
+        let effects = handle_event(&mut s, Event::FetchedReviews(Err(anyhow!("boom"))));
+        assert!(effects.is_empty());
+        assert!(!s.review.loading);
+        assert_eq!(s.review.prs.len(), 1);
+        assert_eq!(s.review.error.as_deref(), Some("取得失敗: boom"));
+        assert!(s.message.is_none());
+
+        let effects = handle_event(&mut s, Event::FetchedReviews(Ok(vec![pr(11)])));
+        assert_eq!(effects, vec![Effect::SaveCache]);
+        assert!(s.review.error.is_none());
+        assert!(s.review.fetched_at.is_some());
+        assert_eq!(s.review.prs[0].number, 11);
+    }
+
     #[test]
     fn fetched_replaces_and_saves() {
         let mut s = state(vec![pr(1)]);
-        s.loading = true;
-        s.from_cache = true;
+        s.mine.loading = true;
+        s.mine.from_cache = true;
         let effects = handle_event(&mut s, Event::Fetched(Ok(vec![pr(2), pr(3)])));
         assert_eq!(effects, vec![Effect::SaveCache]);
-        assert!(!s.loading);
-        assert!(!s.from_cache);
-        assert!(s.fetched_at.is_some());
-        let numbers: Vec<u64> = s.prs.iter().map(|p| p.number).collect();
+        assert!(!s.mine.loading);
+        assert!(!s.mine.from_cache);
+        assert!(s.mine.fetched_at.is_some());
+        let numbers: Vec<u64> = s.mine.prs.iter().map(|p| p.number).collect();
         assert_eq!(numbers, vec![2, 3]);
     }
 
     #[test]
     fn fetched_err_keeps_prs() {
         let mut s = state(vec![pr(1)]);
-        s.loading = true;
+        s.mine.loading = true;
         let effects = handle_event(&mut s, Event::Fetched(Err(anyhow!("boom"))));
         assert!(effects.is_empty());
-        assert!(!s.loading);
-        assert_eq!(s.prs.len(), 1);
+        assert!(!s.mine.loading);
+        assert_eq!(s.mine.prs.len(), 1);
         assert_eq!(message(&s), ("取得失敗: boom", true));
     }
 
@@ -849,11 +972,14 @@ mod tests {
     #[test]
     fn refresh_fetches_sessions_only_with_config() {
         let mut s = state(vec![]);
-        assert_eq!(refresh(&mut s), vec![Effect::Fetch]);
+        assert_eq!(refresh(&mut s), vec![Effect::Fetch, Effect::FetchReviews]);
         assert!(!s.sessions_loading);
 
         let mut s = devin_state(vec![]);
-        assert_eq!(refresh(&mut s), vec![Effect::Fetch, Effect::FetchSessions]);
+        assert_eq!(
+            refresh(&mut s),
+            vec![Effect::Fetch, Effect::FetchReviews, Effect::FetchSessions]
+        );
         assert!(s.sessions_loading);
         // 取得中はどちらも出さない
         assert!(refresh(&mut s).is_empty());
@@ -928,8 +1054,11 @@ mod tests {
         assert!(tick(&mut s, now).is_empty());
         s.last_fetch = Some(now);
         assert!(tick(&mut s, now + Duration::from_secs(1)).is_empty());
-        assert_eq!(tick(&mut s, now + AUTO_REFRESH), vec![Effect::Fetch]);
-        assert!(s.loading);
+        assert_eq!(
+            tick(&mut s, now + AUTO_REFRESH),
+            vec![Effect::Fetch, Effect::FetchReviews]
+        );
+        assert!(s.mine.loading && s.review.loading);
     }
 
     #[test]

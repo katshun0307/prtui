@@ -3,7 +3,7 @@ use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 
-use crate::app::AppState;
+use crate::app::{AppState, Tab};
 use crate::domain::devin::{DevinSession, DevinStatus};
 
 mod chat;
@@ -21,6 +21,8 @@ use table::draw_table;
 /// - red: 壊れている (Conflict, CI 失敗, CHANGES_REQUESTED, 変更要求した reviewer)
 /// - yellow: 自分の対応が要る (未解決スレッド, REVIEW_REQUIRED, reviewer 未設定, 確認プロンプト)
 ///   依頼中の reviewer も yellow にする. 返事待ちで, 催促するかを自分が判断するため
+///   レビュータブの「自分」列も同じ意味で, 依頼中と再依頼は yellow, 承認済は green, 変更要求は red,
+///   コメント済とレビュー済は DIM
 /// - cyan: ブランチ名, ローカルが最新, stack 内の位置
 /// - magenta: ローカルとリモートに差分, 絞り込み中
 /// - DIM: 補助情報, 0 件, Draft
@@ -75,10 +77,12 @@ fn header_line(state: &AppState) -> Line<'static> {
     let mut spans = vec![
         Span::raw(format!(" {} ", state.repo)).bold(),
         Span::raw(format!("{}  ", state.dir.display())).fg(DIM),
-        Span::raw(format!("branch: {}", state.local.current_branch)).cyan(),
+        Span::raw(format!("branch: {}  ", state.local.current_branch)).cyan(),
     ];
-    if let Some(t) = state.fetched_at {
-        let label = if state.from_cache {
+    spans.extend(tab_spans(state));
+    let list = state.list();
+    if let Some(t) = list.fetched_at {
+        let label = if list.from_cache {
             format!("  取得 {} 前 (キャッシュ)", ago(t))
         } else {
             format!("  取得 {} 前", ago(t))
@@ -88,10 +92,31 @@ fn header_line(state: &AppState) -> Line<'static> {
     if state.local.dirty {
         spans.push(Span::raw("  未コミットの変更あり").yellow());
     }
-    if state.draft_only {
+    if list.draft_only {
         spans.push(Span::raw("  [Draft のみ]").magenta());
     }
     Line::from(spans)
+}
+
+/// `[1 自分 (n)] 2 レビュー (m)`. 今のタブは反転して強調し, 他は DIM
+fn tab_spans(state: &AppState) -> Vec<Span<'static>> {
+    Tab::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, &tab)| {
+            let text = format!(
+                " {} {} ({}) ",
+                i + 1,
+                tab.label(),
+                state.list_of(tab).prs.len()
+            );
+            if tab == state.tab {
+                Span::raw(text).bold().reversed()
+            } else {
+                Span::raw(text).fg(DIM)
+            }
+        })
+        .collect()
 }
 
 fn footer_line(state: &AppState) -> Line<'static> {
@@ -122,8 +147,9 @@ fn footer_line(state: &AppState) -> Line<'static> {
         let span = Span::raw(format!(" {}", m.text));
         return Line::from(if m.is_error { span.red() } else { span.green() });
     }
-    const KEYS: [(&str, &str); 15] = [
+    const MINE: &[(&str, &str)] = &[
         ("j/k", "移動"),
+        ("Tab/1/2", "タブ"),
         ("Enter/c", "checkout"),
         ("u", "main 取込"),
         ("O", "open"),
@@ -139,8 +165,26 @@ fn footer_line(state: &AppState) -> Line<'static> {
         ("r", "更新"),
         ("q", "終了"),
     ];
+    // 他人の PR を変える操作は出さない
+    const REVIEW: &[(&str, &str)] = &[
+        ("j/k", "移動"),
+        ("Tab/1/2", "タブ"),
+        ("Enter/c", "checkout"),
+        ("d", "diff"),
+        ("o", "ブラウザ"),
+        ("l", "Linear"),
+        ("L", "Linear review"),
+        ("v", "Devin"),
+        ("t", "Draft のみ"),
+        ("r", "更新"),
+        ("q", "終了"),
+    ];
+    let keys = match state.tab {
+        Tab::Mine => MINE,
+        Tab::Review => REVIEW,
+    };
     let mut spans = vec![Span::raw(" ")];
-    for (key, label) in KEYS {
+    for &(key, label) in keys {
         spans.push(Span::raw(key).cyan());
         spans.push(Span::raw(format!(" {label}  ")).fg(DIM));
     }

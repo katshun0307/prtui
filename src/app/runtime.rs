@@ -18,7 +18,9 @@ use super::update;
 use crate::domain::devin::DevinConfig;
 use crate::infra::cache::{self, Cache};
 use crate::infra::devin::{fetch_messages, fetch_sessions, send_message};
-use crate::infra::gh::{self, fetch_pr, fetch_prs, linear_review_url, update_branch};
+use crate::infra::gh::{
+    self, fetch_pr, fetch_prs, fetch_reviews, linear_review_url, update_branch,
+};
 use crate::infra::git::read_local_state;
 use crate::infra::process::open_url;
 
@@ -43,9 +45,14 @@ impl App {
         let local = read_local_state(&dir).unwrap_or_default();
         let mut state = AppState::new(dir, repo, local);
         if let Some(c) = cached {
-            state.fetched_at = Some(c.fetched_at);
-            state.from_cache = true;
-            state.prs = c.prs;
+            state.mine.fetched_at = Some(c.fetched_at);
+            state.mine.from_cache = true;
+            state.mine.prs = c.prs;
+            if let Some((at, prs)) = c.reviews {
+                state.review.fetched_at = Some(at);
+                state.review.from_cache = true;
+                state.review.prs = prs;
+            }
             state.devin_sessions = c.devin_sessions;
         }
         let mut app = Self {
@@ -117,6 +124,9 @@ impl App {
                 Effect::Fetch => {
                     self.spawn(|dir, repo| Event::Fetched(fetch_prs(dir, repo)));
                     self.reload_local();
+                }
+                Effect::FetchReviews => {
+                    self.spawn(|dir, repo| Event::FetchedReviews(fetch_reviews(dir, repo)))
                 }
                 Effect::ReloadLocal => self.reload_local(),
                 Effect::SaveCache => self.save_cache(),
@@ -233,10 +243,12 @@ impl App {
     }
 
     fn save_cache(&mut self) {
+        let (mine, review) = (&self.state.mine, &self.state.review);
         let cache = Cache {
-            fetched_at: self.state.fetched_at.unwrap_or_else(Utc::now),
-            prs: self.state.prs.clone(),
+            fetched_at: mine.fetched_at.unwrap_or_else(Utc::now),
+            prs: mine.prs.clone(),
             devin_sessions: self.state.devin_sessions.clone(),
+            reviews: review.fetched_at.map(|at| (at, review.prs.clone())),
         };
         if let Err(e) = cache::save(&self.state.repo, &cache) {
             self.state.error(format!("キャッシュの保存失敗: {e}"));
