@@ -266,6 +266,8 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
     if state.chat.is_some() {
         return chat_key(state, key);
     }
+    // 前の操作の結果はキーを押したら消し, フッターをキー案内に戻す
+    state.message = None;
     if let Some((n, base)) = state.confirm_update.take() {
         if key.code == KeyCode::Char('y') {
             return update_branch(state, n, base);
@@ -314,10 +316,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
             list.table.select(Some(len.saturating_sub(1)));
             vec![]
         }
-        KeyCode::Char('r') => {
-            state.message = None;
-            refresh(state)
-        }
+        KeyCode::Char('r') => refresh(state),
         KeyCode::Char('t') => {
             let list = state.list_mut();
             list.draft_only = !list.draft_only;
@@ -354,12 +353,8 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
-/// タブを切り替える. 前のタブのメッセージは今のタブの PR と関係ないので消す
 fn switch_tab(state: &mut AppState, tab: Tab) -> Vec<Effect> {
-    if state.tab != tab {
-        state.tab = tab;
-        state.message = None;
-    }
+    state.tab = tab;
     vec![]
 }
 
@@ -378,7 +373,6 @@ fn open_chat(state: &mut AppState) -> Vec<Effect> {
         state.error(format!("#{n} に Devin session が無い"));
         return vec![];
     };
-    state.message = None;
     state.chat = Some(ChatView::new(id, n));
     vec![]
 }
@@ -860,6 +854,15 @@ mod tests {
         assert!(s.review.error.is_none());
         assert!(s.review.fetched_at.is_some());
         assert_eq!(s.review.prs[0].number, 11);
+    }
+
+    #[test]
+    fn key_clears_message() {
+        let mut s = state(vec![pr(1), pr(2)]);
+        handle_event(&mut s, Event::CheckedOut(1, Ok(String::new())));
+        assert_eq!(message(&s), ("#1 をチェックアウトした", false));
+        handle_key(&mut s, key('j'));
+        assert!(s.message.is_none());
     }
 
     #[test]

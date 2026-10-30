@@ -19,6 +19,7 @@
 - Linear を開く: `l` キー. PR の `headRefName` (大文字小文字を無視, 大文字に正規化), 次に `title` から issue キー (`[A-Z][A-Z0-9]*-[0-9]+`) を探し, `https://linear.app/<workspace>/issue/<KEY>` を macOS の `open` で開く. workspace は repo ごとに違うので git config `prtui.linear-workspace` (`infra/git.rs` の `read_local_state` で読む) から取り, 未設定なら設定を促すエラーを出す. キーが無ければ `#<n> に Linear の issue キーが無い` を出す
 - Linear review を開く: `L` キー. review の URL (`https://linear.app/<workspace>/review/<タイトル>-<slugId>`) の slugId は Linear 側の ID で, GitHub の情報からは組み立てられない. Linear の公開 GraphQL API にも GitHub の PR 番号から引くクエリが無い (`diff(id:)` は internal で Linear の ID が要る). そこで Linear の bot (linear-code) が PR に付けるコメントから取る. `gh api --paginate repos/{repo}/issues/{n}/comments` を UI とは別スレッドで呼び, `<!-- linear-review-link -->` の直後の `href` を `?openGuide=true` などの query を外して `open` する. 同じコメントには issue 本文の引用があり, そこに関連する別 PR の review URL が並ぶので, 目印より前は見ない. bot のコメントが無い PR (例: issue に紐付いていない PR) では `#<n> に Linear review のリンクが無い` を出す
 - キャッシュ: 全件取得に成功するたびに一覧を `$XDG_CACHE_HOME/prtui/<owner>__<name>.json` (未設定なら `~/.cache`) に書く. 起動時はこれを読んで即表示し, 裏で取り直す. ヘッダに `取得 Xm 前` を出し, 取り直しが終わるまで `(キャッシュ)` を付ける. `Pr` の形が変わって読めないキャッシュは捨てる. `--dump` はキャッシュを使わない
+- フッターのメッセージ: 操作の結果 (チェックアウトした, 取得失敗など) はフッターにキー案内の代わりに出し, 次に何かキーを押すと消してキー案内に戻す. 押したキーが新しいメッセージを出せばそれに置き換わる
 - 操作後の更新: `u`, `O`, `DD`, `XX`, `RR` の後は全件を取り直さず, その PR だけを `fetch_pr` (`repository.pullRequest` に同じ fragment) で取り直して差し替える. 止める条件は `WatchUntil` (`app/event.rs`) のデータで表す. 反映を待つため 2 秒おきに最大 10 回取り直す. 止める条件は, `u` なら head oid が変わる, open / draft なら `isDraft` が変わる, close なら open でなくなる (一覧から消す). 待っている間は一覧のタイトルに `#n を同期中…` を出す. 差し替え後は `arrange` で並びと stack をまとめ直し, 選択中の PR は番号で追う
 - Devin session: PR に紐づく Devin session のやり取りを読み, メッセージを送る (2026-10-29 追加. 仕様はユーザーと質疑で決めた).
   - 設定は git config `prtui.devin-token` と `prtui.devin-org` (`org-...`). token は個人, org は組織ごとなので置き場所 (global / repo) は自由にした. 未設定なら Devin 列は空で, `v` で設定を促すエラーを出す
@@ -31,7 +32,7 @@
 - レビュータブ: 自分がレビューを依頼された PR とレビューした PR を別タブに並べる (2026-10-30 追加. 仕様はユーザーと質疑で決めた)
   - 対象: open PR のうち `review-requested:@me` か `reviewed-by:@me` に当たるもの. どちらも `-author:@me` を付けて自分の PR を除く. `review-requested` はチーム宛ての依頼も拾う (`user-review-requested` にしなかったのはユーザーの選択). `reviewed-by` はコメントだけ残した PR も拾う. Draft も出す
   - 取得: `QUERY_REVIEW` で 2 つの alias と `viewer { login }` を 1 リクエストで取り, 依頼中側を先に見て番号で重複を除く. 自分タブとは別スレッドで, 取るのは同じタイミング (起動時, 5 分ごと, `r`). 失敗は一覧のタイトルに赤で出し, フッターには出さない. キャッシュは同じファイルの `reviews` に取得時刻と一緒に入れる
-  - 切り替え: `Tab` / `Shift-Tab` と `1` / `2`. ヘッダに `1 自分 (n)  2 レビュー (m)` を出し, 今のタブを反転する. 選択位置と `t` の絞り込みはタブごとに持つ. 切り替えるとフッターのメッセージを消す
+  - 切り替え: `Tab` / `Shift-Tab` と `1` / `2`. ヘッダに `1 自分 (n)  2 レビュー (m)` を出し, 今のタブを反転する. 選択位置と `t` の絞り込みはタブごとに持つ
   - 自分の立場 (`MyReview`): 依頼中の検索に当たれば requested. `latestReviews` から自分 (大文字小文字を無視) の最新のレビューを取る. 依頼中かつレビュー済みなら「再依頼」. `reviewRequests` に自分の login が無ければチーム経由とみなし, PR に依頼されているチームの slug を詳細欄に `依頼: <team> 経由` で出す. 自分の所属チームは取っていないので, 関係ないチームも混ざりうる
   - 並び: 依頼中 (再依頼を含む) を先に, その中とレビュー済みの中はそれぞれ更新日時の降順. stack はまとめない
   - 操作: `Enter`/`c`, `d`, `o`, `l`, `L`, `v`, `t`, `r` は使える. 他人の PR を変える `u` / `O` / `DD` / `XX` / `RR` は無効にし, `<key> はレビュータブでは使えない` を出す (ユーザーの指定)
