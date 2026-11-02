@@ -5,6 +5,7 @@ use std::time::Instant;
 use chrono::{DateTime, Utc};
 use ratatui::widgets::TableState;
 
+use crate::domain::copy::CopyItem;
 use crate::domain::devin::{DevinMessage, DevinSession, session_for};
 use crate::domain::local::LocalState;
 use crate::domain::op::PrOp;
@@ -155,8 +156,13 @@ pub struct AppState {
     pub busy: Option<String>,
     /// base 取り込みの確認待ちの PR 番号と base ブランチ名
     pub confirm_update: Option<(u64, String)>,
+    /// ローカルブランチが PR と分岐してチェックアウトできなかった PR 番号とブランチ名.
+    /// y で PR の最新に reset する
+    pub confirm_force_checkout: Option<(u64, String)>,
     /// 2 回目のキー入力待ちの状態変更 (draft, close)
     pub confirm_op: Option<(u64, PrOp)>,
+    /// `c` で開いたコピー選択画面の項目. 開いたときの PR から作る
+    pub copy_menu: Option<Vec<CopyItem>>,
     pub last_fetch: Option<Instant>,
     /// 操作の反映を待って取り直している PR 番号
     pub syncing: HashSet<u64>,
@@ -180,7 +186,9 @@ impl AppState {
             message: None,
             busy: None,
             confirm_update: None,
+            confirm_force_checkout: None,
             confirm_op: None,
+            copy_menu: None,
             last_fetch: None,
             syncing: HashSet::new(),
             devin_sessions: Vec::new(),

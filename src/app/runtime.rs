@@ -22,7 +22,7 @@ use crate::infra::gh::{
     self, fetch_pr, fetch_prs, fetch_reviews, linear_review_url, update_branch,
 };
 use crate::infra::git::read_local_state;
-use crate::infra::process::open_url;
+use crate::infra::process::{copy_to_clipboard, open_url};
 
 /// Devin session 一覧を取る期間
 const SESSIONS_SINCE_DAYS: i64 = 30;
@@ -130,7 +130,7 @@ impl App {
                 }
                 Effect::ReloadLocal => self.reload_local(),
                 Effect::SaveCache => self.save_cache(),
-                Effect::Checkout(n) => self.checkout(n),
+                Effect::Checkout { number, force } => self.checkout(number, force),
                 Effect::UpdateBranch {
                     number,
                     base,
@@ -156,6 +156,10 @@ impl App {
                         self.state.error(e.to_string());
                     }
                 }
+                Effect::Copy(text) => match copy_to_clipboard(&self.state.dir, &text) {
+                    Ok(()) => self.state.info(format!("コピーした: {text}")),
+                    Err(e) => self.state.error(format!("コピー失敗: {e}")),
+                },
                 Effect::ViewWeb(n) => {
                     if let Err(e) = gh::view_web(&self.state.dir, n) {
                         self.state.error(e.to_string());
@@ -255,8 +259,8 @@ impl App {
         }
     }
 
-    /// 未コミットの変更 (untracked は除く) があれば実行しない
-    fn checkout(&mut self, n: u64) {
+    /// 未コミットの変更 (untracked は除く) があれば実行しない. force の reset で消さないため
+    fn checkout(&mut self, n: u64, force: bool) {
         self.reload_local();
         if self.state.local.dirty {
             self.state.error(format!(
@@ -266,7 +270,7 @@ impl App {
             return;
         }
         self.state.busy = Some(format!("#{n} をチェックアウト中…"));
-        self.spawn(move |dir, _| Event::CheckedOut(n, gh::checkout(dir, n)));
+        self.spawn(move |dir, _| Event::CheckedOut(n, force, gh::checkout(dir, n, force)));
     }
 }
 

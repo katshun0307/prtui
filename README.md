@@ -59,7 +59,8 @@ worktree の中から起動してもメインの checkout を対象にする. �
 | `Tab` / `Shift-Tab`, `1` / `2` | 自分タブとレビュータブの切り替え |
 | `t` | Draft だけに絞る / 戻す |
 | `r` | 取り直す |
-| `Enter` / `c` | メインの checkout で `gh pr checkout` する. 未コミットの変更があれば実行しない |
+| `Enter` | メインの checkout で `gh pr checkout` する. 未コミットの変更があれば実行しない. ローカルの同名ブランチが PR と分岐して失敗したら y/N を聞き, y で `--force` を付けて PR の最新に合わせる |
+| `c` | コピー選択画面を開き, 続くキーで選んだ値をクリップボードに入れる (`b` ブランチ名, `n` PR 番号, `t` タイトル, `u` URL, `m` Markdown リンク, `i` Linear issue キー, `l` Linear issue の URL) |
 | `d` | `gh pr diff` |
 | `o` | PR をブラウザで開く |
 | `u` | main (stacked PR では親ブランチ) をリモートのブランチに取り込む. y/N で確認する. Conflict のときは無効 |

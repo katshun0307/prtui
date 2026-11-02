@@ -18,6 +18,12 @@ pub struct LocalState {
     pub devin: Option<DevinConfig>,
 }
 
+/// `gh pr checkout` の失敗が, ローカルの同名ブランチが PR と分岐していて fast-forward できないためか.
+/// このとき gh はブランチの切り替えまでは済ませている
+pub fn is_diverged(err: &str) -> bool {
+    err.contains("Diverging branches") || err.contains("Not possible to fast-forward")
+}
+
 impl LocalState {
     pub fn is_current(&self, pr: &Pr) -> bool {
         self.current_branch == pr.head_ref_name
@@ -61,5 +67,16 @@ mod tests {
     #[test]
     fn reviewers_from_whitespace() {
         assert_eq!(parse_reviewers("  a\tb  c ,, d "), vec!["a", "b", "c", "d"]);
+    }
+
+    #[test]
+    fn diverged_messages() {
+        assert!(super::is_diverged(
+            "gh pr: Switched to branch 'b'hint: Diverging branches can't be fast-forwarded"
+        ));
+        assert!(super::is_diverged(
+            "fatal: Not possible to fast-forward, aborting."
+        ));
+        assert!(!super::is_diverged("gh pr: could not find pull request"));
     }
 }

@@ -38,3 +38,12 @@ pub fn run_with_stdin(dir: &Path, program: &str, args: &[&str], stdin: &str) -> 
 pub fn open_url(dir: &Path, url: &str) -> Result<()> {
     run(dir, "open", &[url]).map(drop)
 }
+
+/// `open` と同じく macOS 前提で pbcopy を使う
+pub fn copy_to_clipboard(dir: &Path, text: &str) -> Result<()> {
+    let out = run_with_stdin(dir, "pbcopy", &[], text)?;
+    if !out.status.success() {
+        bail!("pbcopy: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(())
+}

@@ -8,8 +8,10 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::event::{Effect, Event, WatchUntil};
 use super::state::{AppState, ChatView, Tab};
+use crate::domain::copy::{CopyItem, copy_items};
 use crate::domain::devin::review_url;
-use crate::domain::linear::linear_issue_key;
+use crate::domain::linear::{issue_url, linear_issue_key};
+use crate::domain::local::is_diverged;
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
 use crate::domain::review::review_targets;
@@ -178,10 +180,25 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
                 }
             }
         }
-        Event::CheckedOut(n, res) => {
+        Event::CheckedOut(n, force, res) => {
             state.busy = None;
             match res {
+                Ok(_) if force => {
+                    state.info(format!("#{n} を PR の最新に合わせてチェックアウトした"))
+                }
                 Ok(_) => state.info(format!("#{n} をチェックアウトした")),
+                // 分岐していれば, ローカルのコミットを捨てて合わせるかを聞く
+                Err(e) if !force && is_diverged(&e.to_string()) => {
+                    let branch = state
+                        .mine
+                        .prs
+                        .iter()
+                        .chain(&state.review.prs)
+                        .find(|p| p.number == n)
+                        .map(|p| p.head_ref_name.clone())
+                        .unwrap_or_default();
+                    state.confirm_force_checkout = Some((n, branch));
+                }
                 Err(e) => state.error(format!("#{n} のチェックアウト失敗: {e}")),
             }
             vec![Effect::ReloadLocal]
@@ -275,12 +292,22 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         state.info(format!("{base} の取り込みを取りやめた"));
         return vec![];
     }
+    if let Some((n, branch)) = state.confirm_force_checkout.take() {
+        if key.code == KeyCode::Char('y') {
+            return checkout(state, n, true);
+        }
+        state.info(format!("{branch} を PR に合わせるのを取りやめた"));
+        return vec![];
+    }
     if let Some((n, op)) = state.confirm_op.take() {
         if key.code == KeyCode::Char(op.key()) {
             return change_state(state, n, op);
         }
         state.info(format!("#{n} の {} を取りやめた", op.label()));
         return vec![];
+    }
+    if let Some(items) = state.copy_menu.take() {
+        return copy(state, items, key);
     }
     if state.tab == Tab::Review
         && let KeyCode::Char(c @ ('u' | 'O' | 'D' | 'X' | 'R')) = key.code
@@ -323,7 +350,16 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
             list.clamp_selection();
             vec![]
         }
-        KeyCode::Enter | KeyCode::Char('c') => checkout(state),
+        KeyCode::Enter => match state.selected() {
+            Some(p) => checkout(state, p.number, false),
+            None => vec![],
+        },
+        KeyCode::Char('c') => {
+            state.copy_menu = state
+                .selected()
+                .map(|p| copy_items(p, state.local.linear_workspace.as_deref()));
+            vec![]
+        }
         KeyCode::Char('o') => state
             .selected()
             .map(|p| Effect::ViewWeb(p.number))
@@ -456,6 +492,23 @@ fn send(chat: &mut ChatView) -> Vec<Effect> {
     }]
 }
 
+/// コピー選択画面のキー. 項目のキーならその値をコピーし, 他のキーは何もせず閉じる
+fn copy(state: &mut AppState, items: Vec<CopyItem>, key: KeyEvent) -> Vec<Effect> {
+    let KeyCode::Char(c) = key.code else {
+        return vec![];
+    };
+    let Some(item) = items.into_iter().find(|i| i.key == c) else {
+        return vec![];
+    };
+    match item.value {
+        Ok(text) => vec![Effect::Copy(text)],
+        Err(reason) => {
+            state.error(format!("{} をコピーできない: {reason}", item.label));
+            vec![]
+        }
+    }
+}
+
 /// 選択中の PR に対応する Linear の issue をブラウザで開く.
 fn open_linear(state: &mut AppState) -> Vec<Effect> {
     let Some((n, key)) = state
@@ -475,9 +528,7 @@ fn open_linear(state: &mut AppState) -> Vec<Effect> {
         state.error(format!("#{n} に Linear の issue キーが無い"));
         return vec![];
     };
-    vec![Effect::OpenUrl(format!(
-        "https://linear.app/{workspace}/issue/{key}"
-    ))]
+    vec![Effect::OpenUrl(issue_url(&workspace, &key))]
 }
 
 /// 選択中の PR の Linear review 画面をブラウザで開く.
@@ -582,15 +633,11 @@ fn change_state(state: &mut AppState, n: u64, op: PrOp) -> Vec<Effect> {
 }
 
 /// 未コミットの変更の判定は git status の読み直しが要るので runtime で行う
-fn checkout(state: &mut AppState) -> Vec<Effect> {
+fn checkout(state: &mut AppState, number: u64, force: bool) -> Vec<Effect> {
     if state.busy.is_some() {
         return vec![];
     }
-    state
-        .selected()
-        .map(|p| Effect::Checkout(p.number))
-        .into_iter()
-        .collect()
+    vec![Effect::Checkout { number, force }]
 }
 
 #[cfg(test)]
@@ -818,10 +865,57 @@ mod tests {
     }
 
     #[test]
+    fn copy_menu_copies_chosen_item() {
+        let mut s = review_state(vec![pr(1)], vec![pr(10)]);
+        handle_key(&mut s, key('2'));
+        assert!(handle_key(&mut s, key('c')).is_empty());
+        assert!(s.copy_menu.is_some());
+        assert_eq!(
+            handle_key(&mut s, key('b')),
+            vec![Effect::Copy("b10".into())]
+        );
+        assert!(s.copy_menu.is_none());
+        handle_key(&mut s, key('c'));
+        assert_eq!(
+            handle_key(&mut s, key('n')),
+            vec![Effect::Copy("#10".into())]
+        );
+    }
+
+    #[test]
+    fn copy_menu_unavailable_item_is_error() {
+        let mut s = state(vec![pr(1)]);
+        handle_key(&mut s, key('c'));
+        assert!(handle_key(&mut s, key('i')).is_empty());
+        assert_eq!(
+            message(&s),
+            ("Linear issue キー をコピーできない: issue キーが無い", true)
+        );
+        assert!(s.copy_menu.is_none());
+    }
+
+    #[test]
+    fn copy_menu_other_key_closes() {
+        let mut s = state(vec![pr(1), pr(2)]);
+        handle_key(&mut s, key('c'));
+        assert!(handle_key(&mut s, key('j')).is_empty());
+        assert!(s.copy_menu.is_none());
+        // 閉じるだけで移動はしない
+        assert_eq!(s.mine.table.selected(), Some(0));
+        assert!(s.message.is_none());
+    }
+
+    #[test]
     fn review_tab_allows_browsing_ops() {
         let mut s = review_state(vec![pr(1)], vec![pr(10)]);
         handle_key(&mut s, key('2'));
-        assert_eq!(handle_key(&mut s, key('c')), vec![Effect::Checkout(10)]);
+        assert_eq!(
+            handle_key(&mut s, code(KeyCode::Enter)),
+            vec![Effect::Checkout {
+                number: 10,
+                force: false
+            }]
+        );
         assert_eq!(handle_key(&mut s, key('o')), vec![Effect::ViewWeb(10)]);
         assert_eq!(handle_key(&mut s, key('L')), vec![Effect::LinearReview(10)]);
         assert_eq!(
@@ -857,9 +951,51 @@ mod tests {
     }
 
     #[test]
+    fn diverged_checkout_asks_then_forces() {
+        let mut s = state(vec![pr(1)]);
+        let err = anyhow!(
+            "gh pr: Switched to branch 'b1'hint: Diverging branches can't be fast-forwarded"
+        );
+        let effects = handle_event(&mut s, Event::CheckedOut(1, false, Err(err)));
+        assert_eq!(effects, vec![Effect::ReloadLocal]);
+        assert_eq!(s.confirm_force_checkout, Some((1, "b1".into())));
+        assert!(s.message.is_none());
+        assert_eq!(
+            handle_key(&mut s, key('y')),
+            vec![Effect::Checkout {
+                number: 1,
+                force: true
+            }]
+        );
+        assert!(s.confirm_force_checkout.is_none());
+    }
+
+    #[test]
+    fn diverged_checkout_cancelled_by_other_key() {
+        let mut s = state(vec![pr(1)]);
+        let err = anyhow!("fatal: Not possible to fast-forward, aborting.");
+        handle_event(&mut s, Event::CheckedOut(1, false, Err(err)));
+        assert!(handle_key(&mut s, key('n')).is_empty());
+        assert_eq!(message(&s), ("b1 を PR に合わせるのを取りやめた", false));
+    }
+
+    #[test]
+    fn other_checkout_error_and_forced_failure_are_errors() {
+        let mut s = state(vec![pr(1)]);
+        handle_event(&mut s, Event::CheckedOut(1, false, Err(anyhow!("boom"))));
+        assert!(s.confirm_force_checkout.is_none());
+        assert_eq!(message(&s), ("#1 のチェックアウト失敗: boom", true));
+        // --force でも失敗したらもう聞かない
+        let err = anyhow!("Diverging branches");
+        handle_event(&mut s, Event::CheckedOut(1, true, Err(err)));
+        assert!(s.confirm_force_checkout.is_none());
+        assert!(message(&s).1);
+    }
+
+    #[test]
     fn key_clears_message() {
         let mut s = state(vec![pr(1), pr(2)]);
-        handle_event(&mut s, Event::CheckedOut(1, Ok(String::new())));
+        handle_event(&mut s, Event::CheckedOut(1, false, Ok(String::new())));
         assert_eq!(message(&s), ("#1 をチェックアウトした", false));
         handle_key(&mut s, key('j'));
         assert!(s.message.is_none());

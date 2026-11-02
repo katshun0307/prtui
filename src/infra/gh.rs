@@ -136,8 +136,14 @@ pub fn linear_review_url(dir: &Path, repo: &str, number: u64) -> Result<Option<S
     Ok(extract_review_url(&bodies))
 }
 
-pub fn checkout(dir: &Path, number: u64) -> Result<String> {
-    run(dir, "gh", &["pr", "checkout", &number.to_string()])
+/// force ならローカルの同名ブランチを PR の最新に reset する. ローカルだけのコミットは消える
+pub fn checkout(dir: &Path, number: u64, force: bool) -> Result<String> {
+    let n = number.to_string();
+    let mut args = vec!["pr", "checkout", &n];
+    if force {
+        args.push("--force");
+    }
+    run(dir, "gh", &args)
 }
 
 /// PR の状態を変える. Review のときは targets を `--add-reviewer` に渡す

@@ -7,11 +7,13 @@ use crate::app::{AppState, Tab};
 use crate::domain::devin::{DevinSession, DevinStatus};
 
 mod chat;
+mod copy;
 mod detail;
 pub mod format;
 mod table;
 
 use chat::draw_chat;
+use copy::draw_copy_menu;
 use detail::detail_view;
 use format::ago;
 use table::draw_table;
@@ -71,6 +73,9 @@ pub fn draw(f: &mut Frame, state: &mut AppState) {
     draw_table(f, state, list);
     f.render_widget(detail_view(state), detail);
     f.render_widget(footer_line(state), footer);
+    if let Some(items) = &state.copy_menu {
+        draw_copy_menu(f, items, f.area());
+    }
 }
 
 fn header_line(state: &AppState) -> Line<'static> {
@@ -132,6 +137,15 @@ fn footer_line(state: &AppState) -> Line<'static> {
             .bold(),
         );
     }
+    if let Some((n, branch)) = &state.confirm_force_checkout {
+        return Line::from(
+            Span::raw(format!(
+                " #{n}: ローカルの {branch} が PR と分岐している. ローカルだけのコミットを捨てて PR の最新に合わせる? (y/N)"
+            ))
+            .yellow()
+            .bold(),
+        );
+    }
     if let Some((n, op)) = state.confirm_op {
         return Line::from(
             Span::raw(format!(
@@ -143,6 +157,13 @@ fn footer_line(state: &AppState) -> Line<'static> {
             .bold(),
         );
     }
+    if state.copy_menu.is_some() {
+        return Line::from(
+            Span::raw(" コピーする項目のキーを押す. 他のキーで閉じる")
+                .yellow()
+                .bold(),
+        );
+    }
     if let Some(m) = &state.message {
         let span = Span::raw(format!(" {}", m.text));
         return Line::from(if m.is_error { span.red() } else { span.green() });
@@ -150,7 +171,8 @@ fn footer_line(state: &AppState) -> Line<'static> {
     const MINE: &[(&str, &str)] = &[
         ("j/k", "移動"),
         ("Tab/1/2", "タブ"),
-        ("Enter/c", "checkout"),
+        ("Enter", "checkout"),
+        ("c", "コピー"),
         ("u", "main 取込"),
         ("O", "open"),
         ("DD", "draft"),
@@ -169,7 +191,8 @@ fn footer_line(state: &AppState) -> Line<'static> {
     const REVIEW: &[(&str, &str)] = &[
         ("j/k", "移動"),
         ("Tab/1/2", "タブ"),
-        ("Enter/c", "checkout"),
+        ("Enter", "checkout"),
+        ("c", "コピー"),
         ("d", "diff"),
         ("o", "ブラウザ"),
         ("l", "Linear"),

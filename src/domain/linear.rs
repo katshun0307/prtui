@@ -4,6 +4,10 @@ pub fn linear_issue_key(branch: &str, title: &str) -> Option<String> {
     find_issue_key(branch, true).or_else(|| find_issue_key(title, false))
 }
 
+pub fn issue_url(workspace: &str, key: &str) -> String {
+    format!("https://linear.app/{workspace}/issue/{key}")
+}
+
 /// `[A-Z][A-Z0-9]*-[0-9]+` に最初に一致する部分を大文字で返す. regex crate を足さずに手書きで探す.
 fn find_issue_key(s: &str, ignore_case: bool) -> Option<String> {
     let b = s.as_bytes();

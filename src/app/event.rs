@@ -10,7 +10,8 @@ pub enum Event {
     Fetched(Result<Vec<Pr>>),
     /// レビュータブの全件
     FetchedReviews(Result<Vec<Pr>>),
-    CheckedOut(u64, Result<String>),
+    /// PR 番号, `--force` を付けたか, 結果
+    CheckedOut(u64, bool, Result<String>),
     /// 成功時は取り込んだ base ブランチ名
     UpdatedBranch(u64, Result<String>),
     /// Linear review の URL. コメントに見つからなければ None
@@ -49,8 +50,12 @@ pub enum Effect {
     ReloadLocal,
     /// 現在の一覧をキャッシュに書く
     SaveCache,
-    /// 未コミットの変更が無ければスレッドで `gh pr checkout` する
-    Checkout(u64),
+    /// 未コミットの変更が無ければスレッドで `gh pr checkout` する.
+    /// force ならローカルの同名ブランチを PR の最新に reset する
+    Checkout {
+        number: u64,
+        force: bool,
+    },
     UpdateBranch {
         number: u64,
         base: String,
@@ -68,6 +73,8 @@ pub enum Effect {
         until: WatchUntil,
     },
     OpenUrl(String),
+    /// クリップボードに入れる
+    Copy(String),
     ViewWeb(u64),
     /// Devin session 一覧をスレッドで取る. 対象期間は runtime が決める
     FetchSessions,
