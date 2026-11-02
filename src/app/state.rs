@@ -127,6 +127,7 @@ impl PrList {
         self.clamp_selection();
     }
 
+    /// 端を越えたら反対の端に回る
     pub fn move_by(&mut self, delta: isize) {
         let len = self.visible().len();
         if len == 0 {
@@ -134,7 +135,7 @@ impl PrList {
         }
         let cur = self.table.selected().unwrap_or(0) as isize;
         self.table
-            .select(Some((cur + delta).clamp(0, len as isize - 1) as usize));
+            .select(Some((cur + delta).rem_euclid(len as isize) as usize));
     }
 
     pub fn clamp_selection(&mut self) {

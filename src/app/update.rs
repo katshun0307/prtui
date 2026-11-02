@@ -750,6 +750,20 @@ mod tests {
     }
 
     #[test]
+    fn move_wraps_around() {
+        let mut s = state(vec![pr(1), pr(2), pr(3)]);
+        let selected = |s: &AppState| s.selected().map(|p| p.number);
+        handle_key(&mut s, code(KeyCode::Up));
+        assert_eq!(selected(&s), Some(3));
+        handle_key(&mut s, code(KeyCode::Down));
+        assert_eq!(selected(&s), Some(1));
+        handle_key(&mut s, key('j'));
+        handle_key(&mut s, key('j'));
+        handle_key(&mut s, key('j'));
+        assert_eq!(selected(&s), Some(1));
+    }
+
+    #[test]
     fn draft_cancelled_by_other_key() {
         let mut s = state(vec![pr(1)]);
         handle_key(&mut s, key('D'));
