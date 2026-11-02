@@ -41,7 +41,7 @@ fragment pr on PullRequest {
     ... on User { login }
     ... on Team { slug }
   } } }
-  latestReviews(first:20) { nodes { state author { login } } }
+  latestReviews(first:20) { nodes { state author { __typename login } } }
   reviewThreads(first:100) { nodes { isResolved } }
   headRef { compare(headRef:"main") { aheadBy } }
   commits(last:1) { nodes { commit { statusCheckRollup {
@@ -102,7 +102,15 @@ struct RequestedReviewer {
 #[derive(Deserialize)]
 struct Review {
     state: String,
-    author: Option<Login>,
+    author: Option<ReviewAuthor>,
+}
+
+#[derive(Deserialize)]
+struct ReviewAuthor {
+    /// User, Bot, Mannequin など. 古いキャッシュやテストの JSON に無ければ空
+    #[serde(rename = "__typename", default)]
+    typename: String,
+    login: String,
 }
 
 #[derive(Deserialize)]
@@ -427,7 +435,8 @@ fn convert(r: RawPr) -> Option<Pr> {
 
 /// 依頼中の reviewer を先に並べ, その後ろにレビュー済みの reviewer を最新の状態で並べる.
 /// 承認後に再依頼された人は reviewRequests にも latestReviews にも出るので, 依頼中を優先する.
-/// author 自身のレビュー (自分のコメント) と DISMISSED, 未送信 (PENDING) は出さない.
+/// author 自身のレビュー (自分のコメント) と Bot (devin-ai-integration など) のレビュー,
+/// DISMISSED, 未送信 (PENDING) は出さない. Bot は GitHub の Reviewers 欄に出ないため.
 fn convert_reviewers(
     author: &str,
     requests: Vec<ReviewRequest>,
@@ -443,7 +452,7 @@ fn convert_reviewers(
         })
         .collect();
     for rv in reviews {
-        let Some(name) = rv.author.map(|a| a.login) else {
+        let Some(name) = rv.author.filter(|a| a.typename != "Bot").map(|a| a.login) else {
             continue;
         };
         if name == author || out.iter().any(|r| r.name == name) {
@@ -557,7 +566,8 @@ mod tests {
     fn review(login: &str, state: &str) -> Review {
         Review {
             state: state.into(),
-            author: Some(Login {
+            author: Some(ReviewAuthor {
+                typename: "User".into(),
                 login: login.into(),
             }),
         }
@@ -600,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn reviewers_skip_author_dismissed_and_pending() {
+    fn reviewers_skip_author_bot_dismissed_and_pending() {
         let rs = convert_reviewers(
             "me",
             vec![],
@@ -611,6 +621,13 @@ mod tests {
                 Review {
                     state: "APPROVED".into(),
                     author: None,
+                },
+                Review {
+                    state: "COMMENTED".into(),
+                    author: Some(ReviewAuthor {
+                        typename: "Bot".into(),
+                        login: "devin-ai-integration".into(),
+                    }),
                 },
                 review("z", "APPROVED"),
             ],

@@ -74,7 +74,7 @@ refactor 前は 1 つの `App` に状態, キー判断, スレッド起動, gh �
 - main: main にあって PR ブランチに無いコミット数. `headRef { compare(headRef:"main") { aheadBy } }` で取る. base は main 固定 (検証用 repo は trunk-based で base が常に main のため)
 - 差分: 追加行 `+x` (green) と削除行 `-y` (red). `additions` / `deletions`
 - Review: `reviewDecision`. GitHub がブランチ保護ルールから計算する値なので, 必須レビューのルールが無い repo (検証用 repo など) では常に `-` になる
-- Reviewer: 承認 ✓n (green), 変更要求 ✗n (red), 依頼中 ●n (yellow) の人数. `reviewRequests` (依頼中) と `latestReviews` (各人の最新レビュー) から作る. 承認後に再依頼された人は依頼中として数える. author 自身, DISMISSED, PENDING は除く. コメントのみの人 (devin などの bot を含む) は数えない. 数える人が居なければ「未設定」で, Draft なら DIM, それ以外は yellow. 詳細欄の `reviewers:` 行に名前と状態を全員分出す. Review 列が `-` の repo でも誰に頼んでいて誰が承認したかが分かるように足した
+- Reviewer: 承認 ✓n (green), 変更要求 ✗n (red), 依頼中 ●n (yellow), コメントのみ ✎n (DIM) の人数. `reviewRequests` (依頼中) と `latestReviews` (各人の最新レビュー) から作る. 承認後に再依頼された人は依頼中として数える. author 自身, Bot (`latestReviews` の author の `__typename` が `Bot`. devin-ai-integration など), DISMISSED, PENDING は除く. Bot は GitHub の Reviewers 欄に出ないため. コメントのみの人は ✎n で別に数え, 承認・変更要求・依頼中が居なければ「未設定」を前に付ける (例 `未設定 ✎2`).「未設定」は Draft なら DIM, それ以外は yellow. 詳細欄の `reviewers:` 行に名前と状態を全員分出す. Review 列が `-` の repo でも誰に頼んでいて誰が承認したかが分かるように足した
 - Local: ローカルの同名ブランチの oid が PR の head と一致すれば「最新」, 違えば「差分あり」. 現在のブランチに ● を付ける
 - Devin: PR に紐づく最新の Devin session の status. 複数なら `×n`. Devin を設定していなければ空
 
@@ -108,6 +108,8 @@ refactor 前は 1 つの `App` に状態, キー判断, スレッド起動, gh �
   - 送信失敗のエラーが次のポーリングで消えていた
   - 送信中に打った文字が成功時に消えていた
   - 会話ビューのヘッダが選択中の PR を引いていて, PR が一覧から消えるとずれた. `ChatView` に PR 番号を持たせた
+- 2026-11-02: Reviewer 列にコメントのみの人数 ✎n (DIM) を足した. 列幅を 10 から 13 に広げた. 検証用 repo の tmux 表示で `✓1 ✎2`, `未設定 ✎1` を確認. `cargo test` 103 件通過
+- 2026-11-02: Bot (devin-ai-integration など) のレビューを reviewer から外した. GitHub の Reviewers 欄に出ず, ✎n に数えると誤解を招くため
 
 ## 未確認
 

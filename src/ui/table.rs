@@ -84,7 +84,7 @@ fn mine_rows(state: &AppState) -> Columns<'static> {
         Constraint::Length(5),
         Constraint::Length(12),
         Constraint::Length(9),
-        Constraint::Length(10),
+        Constraint::Length(13),
         Constraint::Length(10),
         Constraint::Length(11),
         Constraint::Length(4),
@@ -140,7 +140,7 @@ fn review_rows(state: &AppState) -> Columns<'static> {
         Constraint::Length(14),
         Constraint::Length(10),
         Constraint::Length(4),
-        Constraint::Length(10),
+        Constraint::Length(13),
         Constraint::Length(10),
         Constraint::Length(11),
         Constraint::Length(4),
@@ -273,21 +273,27 @@ fn review_cell(p: &Pr) -> Cell<'static> {
     }
 }
 
-/// 承認 ✓n, 変更要求 ✗n, 依頼中 ●n を数で出す. コメントのみの reviewer (bot を含む) は数えない.
-/// 数える reviewer が居なければ「未設定」. Draft なら設定前で当然なので DIM, それ以外は対応が要るので yellow
+/// 承認 ✓n, 変更要求 ✗n, 依頼中 ●n, コメントのみ ✎n を数で出す. Bot は reviewers に入らないので数えない.
+/// 承認, 変更要求, 依頼中が居なければ「未設定」を前に出す (コメントのみでは reviewer を設定したことにならない).
+/// Draft なら設定前で当然なので DIM, それ以外は対応が要るので yellow
 fn reviewer_cell(p: &Pr) -> Cell<'static> {
+    Cell::from(Line::from(reviewer_counts(p)))
+}
+
+fn reviewer_counts(p: &Pr) -> Vec<Span<'static>> {
     let approved = p.count_reviewers(ReviewerState::Approved);
     let changes = p.count_reviewers(ReviewerState::ChangesRequested);
     let requested = p.count_reviewers(ReviewerState::Requested);
-    if approved + changes + requested == 0 {
-        let cell = Cell::from("未設定");
-        return if p.is_draft {
-            cell.fg(DIM)
-        } else {
-            cell.yellow()
-        };
-    }
+    let commented = p.count_reviewers(ReviewerState::Commented);
     let mut spans = Vec::new();
+    if approved + changes + requested == 0 {
+        let span = Span::raw("未設定 ");
+        spans.push(if p.is_draft {
+            span.fg(DIM)
+        } else {
+            span.yellow()
+        });
+    }
     if approved > 0 {
         spans.push(Span::raw(format!("✓{approved} ")).green());
     }
@@ -295,9 +301,12 @@ fn reviewer_cell(p: &Pr) -> Cell<'static> {
         spans.push(Span::raw(format!("✗{changes} ")).red());
     }
     if requested > 0 {
-        spans.push(Span::raw(format!("●{requested}")).yellow());
+        spans.push(Span::raw(format!("●{requested} ")).yellow());
     }
-    Cell::from(Line::from(spans))
+    if commented > 0 {
+        spans.push(Span::raw(format!("✎{commented}")).fg(DIM));
+    }
+    spans
 }
 
 /// PR に紐づく最新の session の status. 2 件以上なら `×n` を付ける. session が無ければ空
@@ -327,6 +336,7 @@ fn local_cell(local: &LocalState, p: &Pr) -> Cell<'static> {
 mod tests {
     use super::*;
     use crate::domain::devin::DevinStatus;
+    use crate::domain::pr::Reviewer;
     use ratatui::style::Color;
 
     #[test]
@@ -340,6 +350,31 @@ mod tests {
         assert_eq!(span.style.fg, Some(Color::Cyan));
         let span = devin_span(Some((&s, 3)));
         assert_eq!(span.content, "suspended×3");
+    }
+
+    #[test]
+    fn reviewer_counts_include_commenters() {
+        let reviewer = |name: &str, state| Reviewer {
+            name: name.into(),
+            state,
+        };
+        let text = |p: &Pr| {
+            reviewer_counts(p)
+                .iter()
+                .map(|s| s.content.to_string())
+                .collect::<String>()
+        };
+        let mut p = Pr::fixture(1, "a", "main");
+        p.reviewers = vec![
+            reviewer("alice", ReviewerState::Requested),
+            reviewer("bob", ReviewerState::Approved),
+            reviewer("carol", ReviewerState::Commented),
+            reviewer("dave", ReviewerState::Commented),
+        ];
+        assert_eq!(text(&p), "✓1 ●1 ✎2");
+        p.reviewers.retain(|r| r.state == ReviewerState::Commented);
+        assert_eq!(text(&p), "未設定 ✎2");
+        assert_eq!(reviewer_counts(&p)[0].style.fg, Some(Color::Yellow));
     }
 
     #[test]

@@ -42,7 +42,7 @@ worktree の中から起動してもメインの checkout を対象にする. �
 | main | main にあって PR ブランチに無いコミット数 |
 | 差分 | 追加行と削除行 |
 | Review | `reviewDecision` |
-| Reviewer | 承認 ✓, 変更要求 ✗, 依頼中 ● の人数 |
+| Reviewer | 承認 ✓, 変更要求 ✗, 依頼中 ●, コメントのみ ✎ の人数 |
 | Local | ローカルの同名ブランチが PR の head と一致すれば「最新」, 違えば「差分あり」 |
 | Devin | PR に紐づく最新の Devin session の status |
 
