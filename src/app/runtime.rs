@@ -15,8 +15,9 @@ use ratatui::crossterm::event::KeyEvent;
 use super::event::{Action, Effect, Event, WatchUntil};
 use super::state::AppState;
 use super::update;
+use crate::domain::cache::{Cache, CustomCache};
 use crate::domain::devin::DevinConfig;
-use crate::infra::cache::{self, Cache, CustomCache};
+use crate::infra::cache;
 use crate::infra::devin::{fetch_messages, fetch_sessions, send_message};
 use crate::infra::gh::{
     self, fetch_custom, fetch_pr, fetch_prs, fetch_reviews, linear_review_url, update_branch,
