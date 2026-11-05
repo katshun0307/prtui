@@ -8,8 +8,8 @@ use crate::domain::pr::Pr;
 use crate::domain::review::arrange_reviews;
 use crate::domain::stack::{arrange, arrange_flat};
 use crate::infra::graphql::{
-    FRAGMENT, FRAGMENT_REQUESTED, QUERY, QUERY_CUSTOM, QUERY_ONE, QUERY_REVIEW, parse_custom,
-    parse_one, parse_review, parse_search,
+    QUERY, QUERY_CUSTOM, QUERY_ONE, QUERY_REVIEW, parse_custom, parse_one, parse_review,
+    parse_search,
 };
 use crate::infra::process::run;
 
@@ -106,7 +106,7 @@ fn fetch_prs_args(repo: &str) -> Vec<String> {
         "api".into(),
         "graphql".into(),
         "-f".into(),
-        format!("query={QUERY}{FRAGMENT}"),
+        format!("query={QUERY}"),
         "-f".into(),
         format!("author={base} author:@me"),
         "-f".into(),
@@ -122,7 +122,7 @@ fn fetch_reviews_args(repo: &str) -> Result<Vec<String>> {
         "api".into(),
         "graphql".into(),
         "-f".into(),
-        format!("query={QUERY_REVIEW}{FRAGMENT}{FRAGMENT_REQUESTED}"),
+        format!("query={QUERY_REVIEW}"),
         "-f".into(),
         format!("requested={base} review-requested:@me"),
         "-f".into(),
@@ -137,7 +137,7 @@ fn fetch_custom_args(repo: &str, query: &str) -> Vec<String> {
         "api".into(),
         "graphql".into(),
         "-f".into(),
-        format!("query={QUERY_CUSTOM}{FRAGMENT}"),
+        format!("query={QUERY_CUSTOM}"),
         "-f".into(),
         format!("q=repo:{repo} is:pr is:open {query}"),
     ]
@@ -150,7 +150,7 @@ fn fetch_pr_args(repo: &str, number: u64) -> Result<Vec<String>> {
         "api".into(),
         "graphql".into(),
         "-f".into(),
-        format!("query={QUERY_ONE}{FRAGMENT}"),
+        format!("query={QUERY_ONE}"),
         "-f".into(),
         format!("owner={owner}"),
         "-f".into(),

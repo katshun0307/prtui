@@ -1,0 +1,3 @@
+query($q:String!) {
+  search(query:$q, type:ISSUE, first:100) { nodes { ...pr } }
+}

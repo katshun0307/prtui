@@ -8,9 +8,7 @@ use chrono::{DateTime, Utc};
 
 use crate::domain::pr::{Check, CheckState, MyReview, Pr, Reviewer, ReviewerState};
 
-pub(crate) use query::{
-    FRAGMENT, FRAGMENT_REQUESTED, QUERY, QUERY_CUSTOM, QUERY_ONE, QUERY_REVIEW,
-};
+pub(crate) use query::{QUERY, QUERY_CUSTOM, QUERY_ONE, QUERY_REVIEW};
 use raw::{
     Context_, CustomResponse, OneResponse, RawPr, RequestedReviewer, Response, Review,
     ReviewRequest, ReviewResponse,
