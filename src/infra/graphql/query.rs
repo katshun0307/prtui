@@ -1,5 +1,5 @@
 //! `gh api graphql` に渡すクエリ. 本文は同じディレクトリの `.graphql` に置き, 使う fragment を後ろに連結した
-//! 文書をここで組み立てる
+//! 文書をここで組み立てる. `schema.graphql` (GitHub の公開 schema) に照らした検証はテストで行う
 
 /// 自分タブ. author と assignee を 2 つの alias で同時に取る
 pub(crate) const QUERY: &str = concat!(
@@ -28,3 +28,29 @@ pub(crate) const QUERY_ONE: &str = concat!(
     include_str!("one.graphql"),
     include_str!("fragment_pr.graphql")
 );
+
+#[cfg(test)]
+mod tests {
+    use apollo_compiler::{ExecutableDocument, Schema};
+
+    use super::*;
+
+    /// `task schema` で取り直した GitHub の公開 schema
+    const SCHEMA: &str = include_str!("schema.graphql");
+
+    /// 送る文書がすべて schema に照らして正しい (フィールド名, 引数, 変数の型, fragment の型条件)
+    #[test]
+    fn queries_are_valid_against_schema() {
+        let schema = Schema::parse_and_validate(SCHEMA, "schema.graphql").unwrap();
+        for (name, doc) in [
+            ("QUERY", QUERY),
+            ("QUERY_REVIEW", QUERY_REVIEW),
+            ("QUERY_CUSTOM", QUERY_CUSTOM),
+            ("QUERY_ONE", QUERY_ONE),
+        ] {
+            if let Err(e) = ExecutableDocument::parse_and_validate(&schema, doc, name) {
+                panic!("{name}:\n{}", e.errors);
+            }
+        }
+    }
+}
