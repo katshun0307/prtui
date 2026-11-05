@@ -1,0 +1,34 @@
+---
+source: src/ui/mod.rs
+expression: screen(&terminal(&mut s))
+---
+ o/r /src/r  branch: feat-a    取得 5m 前  [Draft のみ]
+  1 自分 (4)  2 レビュー (6)  3 マージ予定 (3)
+ PR 1 件 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  #      Stack 状態     CI      未解決 main  差分         Reviewer      Local      Devin       更新 タイトル
+▶ #2     2/2   Draft    ● 1/2   2      -     +20 -2       未設定        差分あり   suspended×2 2d   └ 土台の上に画面を足す
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 詳細 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+#2 土台の上に画面を足す
+branch: feat-b ← feat-a  author: katshun  assignees:
++20 -2  3 files  threads: 未解決 2 / 3  labels:
+reviewers: 未設定
+実行中: test
+devin: suspended https://app.devin.ai/sessions/devin-3
+https://github.com/o/r/pull/2
+
+
+ j/k 移動  Tab/1-3 タブ  Enter checkout  c コピー  u main 取込  O open  DD draft  XX close  RR review 依頼  d diff  o ブラウザ  l Linear  L Linear review  v Dev

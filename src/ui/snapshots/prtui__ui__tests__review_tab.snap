@@ -1,0 +1,34 @@
+---
+source: src/ui/mod.rs
+expression: screen(&term)
+---
+ o/r /src/r  branch: feat-a    取得 5m 前  未コミットの変更あり
+  1 自分 (4)  2 レビュー (6)  3 マージ予定 (3)
+ PR 6 件 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  #      状態     CI      未解決 差分         Author         自分       依頼 Reviewer      Local      Devin       更新 タイトル
+  #11    Ready    -       0      +110 -11     alice          依頼中     3d   ●1                                   2d   依頼された PR
+▶ #12    Ready    -       0      +120 -12     bob            再依頼     5h   ●1 ✎1                    error       2d   チーム経由で再依頼された PR
+  #13    Ready    -       0      +130 -13     carol          承認済          ✓1            ● 差分あり             2d   承認した PR
+  #14    Ready    -       0      +140 -14     dave           変更要求        未設定                               2d   変更を求めた PR
+  #15    Ready    -       0      +150 -15     erin           コメント済      未設定                               2d   コメントした PR
+  #16    Ready    -       0      +160 -16     frank          レビュー済      未設定                               2d   dismiss された PR
+
+
+
+
+
+
+
+
+
+ 詳細 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+#12 チーム経由で再依頼された PR
+branch: feat-y ← main  author: bob  assignees:
++120 -12  3 files  threads: 未解決 0 / 0  labels:
+reviewers: backend (依頼中), katshun (コメント)
+依頼: backend 経由
+devin: error https://app.devin.ai/sessions/devin-4
+https://github.com/o/r/pull/12
+
+
+ j/k 移動  Tab/1-3 タブ  Enter checkout  c コピー  d diff  o ブラウザ  l Linear  L Linear review  v Devin  V Devin Review  t Draft のみ  r 更新  q 終了

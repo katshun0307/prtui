@@ -1,0 +1,34 @@
+---
+source: src/ui/mod.rs
+expression: screen(&term)
+---
+ o/r /src/r  branch: feat-a    未コミットの変更あり
+  1 自分 (4)  2 レビュー (6)  3 マージ予定 (3)
+ PR 3 件 取得失敗: HTTP 502 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  #      状態     CI      未解決 main  差分         Reviewer      Author       Assignee     Local      Devin       更新 タイトル
+  #21    Ready    -       0      0     +210 -21     ✓1            alice        -            ● 差分あり             2d   誰にも割り当てていない PR
+  #22    Ready    -       0      ↓12   +220 -22     未設定        katshun      bob                                 2d   1 人に割り当てた PR
+▶ #23    Ready    -       0      0     +230 -23     未設定        carol        carol +2                            2d   3 人に割り当てた PR
+
+
+
+
+
+
+
+
+
+
+
+
+ 詳細 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+#23 3 人に割り当てた PR
+branch: feat-r ← main  author: carol  assignees: carol, dave, erin
++230 -23  3 files  threads: 未解決 0 / 0  labels:
+reviewers: 未設定
+https://github.com/o/r/pull/23
+
+
+
+
+ j/k 移動  Tab/1-3 タブ  Enter checkout  c コピー  d diff  o ブラウザ  l Linear  L Linear review  v Devin  V Devin Review  t Draft のみ  r 更新  q 終了
