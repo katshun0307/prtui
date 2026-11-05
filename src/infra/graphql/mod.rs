@@ -1,271 +1,20 @@
+mod query;
+mod raw;
+
 use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
 
 use crate::domain::pr::{Check, CheckState, MyReview, Pr, Reviewer, ReviewerState};
 
-pub(crate) const QUERY: &str = r#"query($author:String!, $assignee:String!) {
-  author: search(query:$author, type:ISSUE, first:100) { nodes { ...pr } }
-  assignee: search(query:$assignee, type:ISSUE, first:100) { nodes { ...pr } }
-}"#;
-
-/// レビュータブ. 依頼中とレビュー済みを 2 つの alias で取り, 自分の立場を出すため viewer も取る.
-/// 依頼中側は依頼を受けた時刻を出すため `FRAGMENT_REQUESTED` も取る.
-/// チーム経由の依頼を自分の所属チームに絞るため, repo の owner が組織なら自分の所属チームも取る.
-/// `role` は viewer の立場での絞り込みで, maintainer の扱いが不明なので MEMBER と ADMIN を両方取る
-pub(crate) const QUERY_REVIEW: &str = r#"query($requested:String!, $reviewed:String!, $owner:String!) {
-  viewer { login }
-  owner: repositoryOwner(login:$owner) { ... on Organization {
-    member: teams(first:100, role:MEMBER) { nodes { slug } }
-    admin: teams(first:100, role:ADMIN) { nodes { slug } }
-  } }
-  requested: search(query:$requested, type:ISSUE, first:100) { nodes { ...pr ...requested } }
-  reviewed: search(query:$reviewed, type:ISSUE, first:100) { nodes { ...pr } }
-}"#;
-
-/// 追加のタブ. 検索クエリはタブの設定から組み立てる
-pub(crate) const QUERY_CUSTOM: &str = r#"query($q:String!) {
-  search(query:$q, type:ISSUE, first:100) { nodes { ...pr } }
-}"#;
-
-/// 1 件だけ取り直すときのクエリ. close 済みかを見るため state も取る
-pub(crate) const QUERY_ONE: &str = r#"query($owner:String!, $name:String!, $number:Int!) {
-  repository(owner:$owner, name:$name) { pullRequest(number:$number) { ...pr } }
-}"#;
-
-pub(crate) const FRAGMENT: &str = r#"
-fragment pr on PullRequest {
-  number title url state isDraft headRefName headRefOid baseRefName updatedAt reviewDecision mergeable
-  additions deletions changedFiles
-  author { login }
-  labels(first:20) { nodes { name } }
-  assignees(first:10) { nodes { login } }
-  reviewRequests(first:20) { nodes { requestedReviewer {
-    ... on User { login }
-    ... on Team { slug }
-  } } }
-  latestReviews(first:20) { nodes { state author { __typename login } } }
-  reviewThreads(first:100) { nodes { isResolved } }
-  headRef { compare(headRef:"main") { aheadBy } }
-  commits(last:1) { nodes { commit { statusCheckRollup {
-    contexts(first:100) { nodes {
-      __typename
-      ... on CheckRun { name conclusion status }
-      ... on StatusContext { context state }
-    } }
-  } } } }
-}"#;
-
-/// レビュー依頼の履歴. reviewRequests には依頼の時刻が無いので timeline から取る
-pub(crate) const FRAGMENT_REQUESTED: &str = r#"
-fragment requested on PullRequest {
-  timelineItems(last:50, itemTypes:[REVIEW_REQUESTED_EVENT]) { nodes {
-    ... on ReviewRequestedEvent { createdAt requestedReviewer {
-      ... on User { login }
-      ... on Team { slug }
-    } }
-  } }
-}"#;
-
-#[derive(Deserialize)]
-struct Nodes<T> {
-    nodes: Vec<T>,
-}
-
-#[derive(Deserialize)]
-struct Login {
-    login: String,
-}
-
-#[derive(Deserialize)]
-struct Name {
-    name: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ReviewRequest {
-    requested_reviewer: Option<RequestedReviewer>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RequestedEvent {
-    created_at: DateTime<Utc>,
-    requested_reviewer: Option<RequestedReviewer>,
-}
-
-/// User なら login, Team なら slug が入る. Bot や Mannequin は両方 None
-#[derive(Deserialize)]
-struct RequestedReviewer {
-    login: Option<String>,
-    slug: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct Review {
-    state: String,
-    author: Option<ReviewAuthor>,
-}
-
-#[derive(Deserialize)]
-struct ReviewAuthor {
-    /// User, Bot, Mannequin など. 古いキャッシュやテストの JSON に無ければ空
-    #[serde(rename = "__typename", default)]
-    typename: String,
-    login: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Thread {
-    is_resolved: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CommitNode {
-    commit: Commit,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Commit {
-    status_check_rollup: Option<Rollup>,
-}
-
-#[derive(Deserialize)]
-struct Rollup {
-    contexts: Nodes<Context_>,
-}
-
-#[derive(Deserialize)]
-struct Context_ {
-    #[serde(rename = "__typename")]
-    typename: String,
-    name: Option<String>,
-    conclusion: Option<String>,
-    status: Option<String>,
-    context: Option<String>,
-    state: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawPr {
-    // 検索結果に PullRequest 以外が混ざった場合は空オブジェクトになるので Option にする
-    number: Option<u64>,
-    #[serde(default)]
-    title: String,
-    #[serde(default)]
-    url: String,
-    /// OPEN / CLOSED / MERGED
-    #[serde(default)]
-    state: String,
-    #[serde(default)]
-    is_draft: bool,
-    #[serde(default)]
-    head_ref_name: String,
-    #[serde(default)]
-    head_ref_oid: String,
-    #[serde(default)]
-    base_ref_name: String,
-    updated_at: Option<DateTime<Utc>>,
-    review_decision: Option<String>,
-    #[serde(default)]
-    mergeable: String,
-    #[serde(default)]
-    additions: u64,
-    #[serde(default)]
-    deletions: u64,
-    #[serde(default)]
-    changed_files: u64,
-    author: Option<Login>,
-    labels: Option<Nodes<Name>>,
-    assignees: Option<Nodes<Login>>,
-    review_requests: Option<Nodes<ReviewRequest>>,
-    latest_reviews: Option<Nodes<Review>>,
-    review_threads: Option<Nodes<Thread>>,
-    commits: Option<Nodes<CommitNode>>,
-    head_ref: Option<HeadRef>,
-    /// レビュータブの依頼中側だけ取る
-    timeline_items: Option<Nodes<RequestedEvent>>,
-}
-
-#[derive(Deserialize)]
-struct HeadRef {
-    compare: Option<Compare>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Compare {
-    ahead_by: u64,
-}
-
-#[derive(Deserialize)]
-struct Response {
-    data: Data,
-}
-
-#[derive(Deserialize)]
-struct Data {
-    author: Nodes<RawPr>,
-    assignee: Nodes<RawPr>,
-}
-
-#[derive(Deserialize)]
-struct ReviewResponse {
-    data: ReviewData,
-}
-
-#[derive(Deserialize)]
-struct ReviewData {
-    viewer: Login,
-    /// owner が User なら空オブジェクトになる
-    owner: Option<Owner>,
-    requested: Nodes<RawPr>,
-    reviewed: Nodes<RawPr>,
-}
-
-#[derive(Deserialize)]
-struct Owner {
-    member: Option<Nodes<Slug>>,
-    admin: Option<Nodes<Slug>>,
-}
-
-#[derive(Deserialize)]
-struct Slug {
-    slug: String,
-}
-
-#[derive(Deserialize)]
-struct CustomResponse {
-    data: CustomData,
-}
-
-#[derive(Deserialize)]
-struct CustomData {
-    search: Nodes<RawPr>,
-}
-
-#[derive(Deserialize)]
-struct OneResponse {
-    data: OneData,
-}
-
-#[derive(Deserialize)]
-struct OneData {
-    repository: Repository,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Repository {
-    pull_request: Option<RawPr>,
-}
+pub(crate) use query::{
+    FRAGMENT, FRAGMENT_REQUESTED, QUERY, QUERY_CUSTOM, QUERY_ONE, QUERY_REVIEW,
+};
+use raw::{
+    Context_, CustomResponse, OneResponse, RawPr, RequestedReviewer, Response, Review,
+    ReviewRequest, ReviewResponse,
+};
 
 /// author / assignee の検索結果を解析し, Pr に変換して番号で重複を除く. 並べ替えはしない
 pub(crate) fn parse_search(json: &str) -> Result<Vec<Pr>> {
@@ -533,6 +282,7 @@ fn convert_check(c: Context_) -> Check {
 
 #[cfg(test)]
 mod tests {
+    use super::raw::ReviewAuthor;
     use super::*;
 
     fn check_run(status: &str, conclusion: Option<&str>) -> Context_ {
