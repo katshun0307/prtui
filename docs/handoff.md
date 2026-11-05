@@ -47,7 +47,7 @@
   - 切り替え: `Tab` / `Shift-Tab` で順に回し (端で反対の端に回る), `1`〜`9` で直接選ぶ. 10 個目以降は `Tab` でだけ選べる. タブ欄はヘッダの下の独立した行に出す (ヘッダの 1 行目に並べるとブランチ名が長いときに 3 つ目以降が画面外に切れたため)
   - 操作: レビュータブと同じ (ユーザーの指定). `u` / `O` / `DD` / `XX` / `RR` は無効にし `<key> は<名前>タブでは使えない` を出す. `V` (Devin Review) は使える
   - 列: `# 状態 CI 未解決 main 差分 Reviewer Author Assignee Local Devin 更新 タイトル`. マージの判断に使うことが多いので main を出し, 自分と他人の PR が混ざるので Author と Assignee を出す (Assignee はユーザーの指定). Assignee は先頭の 1 人と `+n` (DIM). Stack は stack をまとめないので, レビュータブの自分と依頼はこのクエリで取らないので出さない. ラベルは絞り込みに使うことが多く重複するので一覧には出さない (詳細欄の `labels:` にはある). Review 列は無い (下の「一覧の列」を参照)
-- 実装: Rust (edition 2024), ratatui 0.30 (crossterm は `ratatui::crossterm` の re-export を使う), serde, anyhow, chrono. GitHub と git は `gh` と `git` コマンドを `std::process::Command` で呼ぶ. 非同期 runtime は使わず, 時間のかかる処理はスレッド + mpsc で UI をブロックしない
+- 実装: Rust (edition 2024), ratatui 0.30 (crossterm は `ratatui::crossterm` の re-export を使う), serde, anyhow, chrono. GitHub と git は `gh` と `git` コマンドを `std::process::Command` で呼ぶ. 非同期 runtime は使わず, 時間のかかる処理はスレッド + mpsc で UI をブロックしない. dev-dependencies は insta (描画と `--dump` の snapshot), pretty_assertions, tempfile
 
 ## 構成
 
@@ -56,23 +56,38 @@
 | ファイル | 役割 |
 |---|---|
 | `src/main.rs` | 引数処理 (`-C`, `--dump`), 端末初期化, イベントループ, 外部コマンド実行時の TUI 一時停止 |
-| `src/dump.rs` | `--dump` のテキスト出力 |
-| `src/domain/` | 純粋な型と関数. `pr.rs` (`Pr`, `MyReview`), `stack.rs` (`arrange`, `arrange_flat`, `group_stacks`), `review.rs` (`review_targets`, `arrange_reviews`), `linear.rs` (issue キーと review URL の抽出), `copy.rs` (`copy_items`), `local.rs` (`LocalState`, `parse_reviewers`, `TabQuery`, `parse_tabs`), `op.rs` (`PrOp`), `devin.rs` (Devin の型と `session_for`, `review_url`) |
+| `src/dump.rs` | `--dump` のテキスト出力. 取得は `run`, 文字列の組み立ては純粋関数 (`header`, `mine`, `review`, `custom`) で, snapshot は `src/snapshots/` |
+| `src/domain/` | 純粋な型と関数. `pr.rs` (`Pr`, `MyReview`), `stack.rs` (`arrange`, `arrange_flat`, `group_stacks`), `review.rs` (`review_targets`, `arrange_reviews`), `linear.rs` (issue キーと review URL の抽出), `copy.rs` (`copy_items`), `local.rs` (`LocalState`, `parse_reviewers`, `TabQuery`, `parse_tabs`), `op.rs` (`PrOp`), `devin.rs` (Devin の型と `session_for`, `review_url`), `cache.rs` (キャッシュの型 `Cache`, `CustomCache`) |
 | `src/infra/process.rs` | コマンド実行ヘルパ `run`, `open_url` |
 | `src/infra/git.rs` | メイン worktree の解決 `main_worktree`, `read_local_state` (現在ブランチ, dirty, refs/heads の oid, git config) |
-| `src/infra/gh.rs` | gh コマンド. 全件取得 `fetch_prs`, レビュータブの `fetch_reviews`, 追加のタブの `fetch_custom`, 1 件取得 `fetch_pr`, `update_branch`, `checkout`, `change_state`, `view_web`, `linear_review_url` |
-| `src/infra/graphql.rs` | GraphQL クエリ, `Raw*` 型と `Pr` への変換, JSON の解析 `parse_search` / `parse_review` / `parse_one` |
+| `src/infra/gh.rs` | gh コマンド. 全件取得 `fetch_prs`, レビュータブの `fetch_reviews`, 追加のタブの `fetch_custom`, 1 件取得 `fetch_pr`, `update_branch`, `checkout`, `change_state`, `view_web`, `linear_review_url`. 引数の組み立ては `*_args` の純粋関数にしてテストする |
+| `src/infra/graphql/` | `query.rs` (クエリ文字列), `raw.rs` (`Raw*` 型), `mod.rs` (`Pr` への変換と JSON の解析 `parse_search` / `parse_review` / `parse_custom` / `parse_one`) |
 | `src/infra/devin.rs` | Devin API v3 (`fetch_sessions`, `fetch_messages`, `send_message`) を curl で呼ぶ. JSON の解析 `parse_*` |
-| `src/infra/cache.rs` | PR 一覧と Devin session 一覧のディスクキャッシュの読み書き |
+| `src/infra/cache.rs` | PR 一覧と Devin session 一覧のディスクキャッシュの置き場所と読み書き |
 | `src/app/state.rs` | 全状態 `AppState`, タブ `Tab` とタブごとの一覧 `PrList`, 追加のタブ `CustomTab`, 会話ビューの `ChatView` |
 | `src/app/event.rs` | `Event` (スレッドの結果), `Effect` (副作用の要求), `Action` (main への指示), `WatchUntil` |
-| `src/app/update.rs` | キー操作, イベント処理, 時間の遷移 (`tick`). `AppState` を更新して `Vec<Effect>` を返す純粋関数 |
-| `src/app/runtime.rs` | `App`. Effect を実行し, スレッドの起動と infra の呼び出しをここに閉じる |
-| `src/ui/` | 描画. `mod.rs` (ヘッダ, フッタ, 配色), `table.rs` (一覧), `detail.rs` (詳細欄), `chat.rs` (会話ビュー), `format.rs` |
+| `src/app/update/` | キー操作, イベント処理, 時間の遷移 (`tick`). `AppState` を更新して `Vec<Effect>` を返す純粋関数. `mod.rs` (`refresh`, `tick`, `handle_key` と一覧の操作), `event.rs` (`handle_event`), `chat.rs` (会話ビューのキー) |
+| `src/app/ports.rs` | runtime が外とやりとりする trait (`Github`, `Git`, `Devin`, `CacheStore`, `Desktop`) とその束 `Ports`, 待ち時間の `RuntimeConfig`. テスト用の fake もここ |
+| `src/app/adapters.rs` | ports の実装. infra の関数に委譲する. `real_ports` |
+| `src/app/runtime.rs` | `App`. Effect を実行し, スレッドの起動と ports の呼び出しをここに閉じる |
+| `src/ui/` | 描画. `mod.rs` (ヘッダ, フッタ, 配色), `table.rs` (一覧. 列はタブごとの `Column` の表), `detail.rs` (詳細欄), `chat.rs` (会話ビュー), `format.rs`. snapshot は `src/ui/snapshots/` |
 
 ### レイヤー化した理由
 
-refactor 前は 1 つの `App` に状態, キー判断, スレッド起動, gh 呼び出しが混ざっていて, キー操作の振る舞いを gh を呼ばずに確かめる手段が無かった. そこで判断 (update) と実行 (runtime) を分け, update は「何をするか」を `Effect` のデータとして返すだけにした. gh / git の差し替え境界は trait ではなくこの `Effect` にした. キー操作とイベント処理のテストは `AppState` と返った `Vec<Effect>` の assert で書け, gh の実装が 1 つしか無いうちに trait を作る必要が無いため. runtime は薄く保って `--dump` と tmux で手動確認する. runtime もテストしたくなったら, その時点で `infra/gh.rs` の関数群を trait にする. watch の終了条件はクロージャだと `Effect` が `Debug` / `PartialEq` を持てず assert できないので, `WatchUntil` の enum にした. `AppState` は ratatui の `TableState` を持つ (選択位置とスクロール offset を毎フレーム作り直すと振る舞いが変わるため). `KeyEvent` もそのまま受け, 独自の入力型は作らない. 新旧で `--dump` の出力と TUI の画面が一致することを確かめてから merge した.
+refactor 前は 1 つの `App` に状態, キー判断, スレッド起動, gh 呼び出しが混ざっていて, キー操作の振る舞いを gh を呼ばずに確かめる手段が無かった. そこで判断 (update) と実行 (runtime) を分け, update は「何をするか」を `Effect` のデータとして返すだけにした. gh / git の差し替え境界は trait ではなくこの `Effect` にした. キー操作とイベント処理のテストは `AppState` と返った `Vec<Effect>` の assert で書け, gh の実装が 1 つしか無いうちに trait を作る必要が無いため. runtime は薄く保って `--dump` と tmux で手動確認する. watch の終了条件はクロージャだと `Effect` が `Debug` / `PartialEq` を持てず assert できないので, `WatchUntil` の enum にした. `AppState` は ratatui の `TableState` を持つ (選択位置とスクロール offset を毎フレーム作り直すと振る舞いが変わるため). `KeyEvent` もそのまま受け, 独自の入力型は作らない. 新旧で `--dump` の出力と TUI の画面が一致することを確かめてから merge した.
+
+### runtime の DI (2026-11-05)
+
+runtime にも checkout の dirty チェック, watch の打ち切り, キャッシュの読み戻し (追加のタブはクエリが一致するものだけ) といった分岐が増え, 手動確認だけでは足りなくなったので, 外部呼び出しを trait 越しにした.
+
+- trait は使う側の `app/ports.rs` に置き, domain にだけ依存させる. 実装は `app/adapters.rs` で infra に委譲する. infra に `impl` を書くと infra が app に依存するため
+- 粒度はサービス単位 (`Github::fetch_prs` など) にし, `process::run` の単位では差し替えない. argv と JSON を丸ごと偽装すると gh の CLI 仕様に結合するため. argv は `gh.rs` の `*_args` を単体テストで見る
+- dir と repo は adapter が持ち, trait の引数から外す. fake が簡単になる
+- `Arc<dyn Trait>` (supertrait `Send + Sync + 'static`) の束 `Ports` を `Clone` してスレッドに渡す. 実装は本物と fake の 2 つだけで, `App` をジェネリックにすると main と ui に型が波及するため
+- `Clock` / `Spawner` の trait と mockall は入れない. Effect 1 つが Event 1 つを返すので, テストは `pump_blocking(n)` で決定的に待てる. watch の sleep は `RuntimeConfig::watch_interval` を 0 にして消す
+- `Cache` 型は serde の純データなので `domain/cache.rs` に移した. ports が infra に依存しないため
+- `--dump` は TUI を通らないので infra を直接呼ぶまま
+- ureq で curl を置き換える案は, エラー文言や TLS 依存が変わる設計変更なので見送った. やるなら `Devin` の adapter の差し替えで済む
 
 ## 一覧の列
 
@@ -123,6 +138,7 @@ refactor 前は 1 つの `App` に状態, キー判断, スレッド起動, gh �
 - 2026-11-02: `c` をコピー選択画面にした. 検証用 repo の tmux 表示でポップアップの桁揃えと, `m` で Markdown リンクが `pbpaste` に入ることを確認. `cargo test` 109 件通過
 - 2026-11-05: 追加のタブ (`prtui.tab`) を足した. clippy 0 件, fmt 通過, `cargo test` 121 件通過. 検証用 repo の設定は書き換えず `GIT_CONFIG_COUNT` の環境変数で `マージ予定=label:マージ予定` を渡し, `--dump` の `# マージ予定` 節に該当の 1 件が出ること, tmux でタブ欄, 列, `3` と `Tab` での切り替え, `u` のエラー表示, 再起動後にキャッシュから件数が出ることを確認
 - 2026-11-02: 一覧の `j`/`k`/矢印の移動を, 端を越えたら反対の端に回るようにした (ユーザーの指定). 会話ビューのスクロールは回さない
+- 2026-11-05: モジュール化, テスト性, DI の refactor をした. fable に計画を相談し, runtime の DI, ui と dump, update の分割, gh と graphql の 4 本を opus subagent に worktree で並行させて cherry-pick した. clippy 0 件, fmt 通過, `cargo test` 154 件通過 (121 件から runtime, gh の argv, 描画と `--dump` の snapshot を足した). 検証用 repo で `--dump` の出力 (経過時間の 1 分差を除く) と, tmux の自分タブとレビュータブの画面 (エスケープコード込み) が refactor 前のビルドと一致することを確認
 
 ## 未確認
 
