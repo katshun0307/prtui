@@ -10,6 +10,8 @@ pub enum Event {
     Fetched(Result<Vec<Pr>>),
     /// レビュータブの全件
     FetchedReviews(Result<Vec<Pr>>),
+    /// 追加のタブ (`AppState::custom` の位置) の全件
+    FetchedCustom(usize, Result<Vec<Pr>>),
     /// PR 番号, `--force` を付けたか, 結果
     CheckedOut(u64, bool, Result<String>),
     /// 成功時は取り込んだ base ブランチ名
@@ -46,6 +48,8 @@ pub enum Effect {
     Fetch,
     /// レビュータブの全件取得をスレッドで行う. 自分タブの取得とは独立
     FetchReviews,
+    /// 追加のタブ (`AppState::custom` の位置) の全件取得をスレッドで行う. タブごとに独立
+    FetchCustom(usize),
     /// LocalState を同期で読み直す
     ReloadLocal,
     /// 現在の一覧をキャッシュに書く

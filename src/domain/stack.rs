@@ -11,6 +11,12 @@ pub fn arrange(mut prs: Vec<Pr>) -> Vec<Pr> {
     group_stacks(prs)
 }
 
+/// stack をまとめずに更新日時の降順に並べる. 他人の PR が混ざる追加のタブで使う
+pub fn arrange_flat(mut prs: Vec<Pr>) -> Vec<Pr> {
+    prs.sort_by_key(|p| std::cmp::Reverse(p.updated_at));
+    prs
+}
+
 /// base が一覧内の別 PR の head になっている PR を親の直後に並べ, `stack` に位置を入れる.
 /// stack 同士は stack 内で最も新しい更新日時の降順に並べる. 入力は更新日時の降順であること.
 /// 親が一覧に無い PR (他人の PR の上に積んだものなど) は stack の根として扱う.

@@ -1,6 +1,6 @@
 # prtui
 
-自分が author か assignee の open PR を 1 画面に並べ, 状態の確認, チェックアウト, main の取り込みを行う TUI. 別タブには自分がレビューを依頼された PR とレビューした PR を並べる. PR に紐づく Devin session の会話を読み, メッセージを送ることもできる.
+自分が author か assignee の open PR を 1 画面に並べ, 状態の確認, チェックアウト, main の取り込みを行う TUI. 別タブには自分がレビューを依頼された PR とレビューした PR を並べる. GitHub の検索クエリで絞ったタブを git config で足すこともできる. PR に紐づく Devin session の会話を読み, メッセージを送ることもできる.
 
 GitHub と git の操作はすべて `gh` と `git` コマンドを呼んで行う.
 
@@ -48,6 +48,8 @@ worktree の中から起動してもメインの checkout を対象にする. �
 
 レビュータブでは Stack, main, Review を外し, Author と自分の立場 (依頼中 / 再依頼 / 承認済 / 変更要求 / コメント済), 依頼 (レビュー依頼を受けてからの経過時間) を出す. 依頼中の PR を依頼の古い順に先頭から並べ, レビュー済みの PR はその下に更新の新しい順に並べる.
 
+追加のタブ (`prtui.tab`) では Stack を外し, Author と Assignee (先頭の 1 人と残りの人数) を出す. stack はまとめず, 更新の新しい順に並べる.
+
 ## キー操作
 
 ### 一覧
@@ -56,7 +58,7 @@ worktree の中から起動してもメインの checkout を対象にする. �
 |---|---|
 | `j` / `k`, `↓` / `↑` | 移動. 端を越えたら反対の端に回る |
 | `g` / `G` | 先頭 / 末尾 |
-| `Tab` / `Shift-Tab`, `1` / `2` | 自分タブとレビュータブの切り替え |
+| `Tab` / `Shift-Tab`, `1`〜`9` | タブの切り替え. `Tab` は端を越えたら反対の端に回る. 数字は左から何番目のタブか |
 | `t` | Draft だけに絞る / 戻す |
 | `r` | 取り直す |
 | `Enter` | メインの checkout で `gh pr checkout` する. 未コミットの変更があれば実行しない. ローカルの同名ブランチが PR と分岐して失敗したら y/N を聞き, y で `--force` を付けて PR の最新に合わせる |
@@ -71,10 +73,10 @@ worktree の中から起動してもメインの checkout を対象にする. �
 | `l` | ブランチ名かタイトルの issue キーから Linear の issue を開く |
 | `L` | Linear の bot のコメントから Linear review を開く |
 | `v` | Devin session の会話ビューを開く |
-| `V` | Devin Review を開く (レビュータブのみ) |
+| `V` | Devin Review を開く (自分タブ以外) |
 | `q` / `Esc` | 終了 |
 
-`u`, `O`, `D`, `X`, `R` は他人の PR を変えるので, レビュータブでは使えない.
+`u`, `O`, `D`, `X`, `R` は他人の PR を変えるので, 自分タブ以外 (レビュータブと追加のタブ) では使えない.
 
 ### 会話ビュー
 
@@ -101,7 +103,13 @@ git config prtui.linear-workspace my-workspace
 # Devin 連携 (v). token は個人のもの, org は org-... の ID
 git config --global prtui.devin-token <token>
 git config prtui.devin-org org-xxxxxxxx
+
+# 追加のタブ. "名前=検索クエリ" を --add で 1 タブずつ足す. 書いた順に自分タブとレビュータブの後ろに並ぶ
+git config --add prtui.tab 'マージ予定=label:マージ予定'
+git config --add prtui.tab '承認待ち=review:required -is:draft'
 ```
+
+追加のタブのクエリは [GitHub の検索構文](https://docs.github.com/ja/search-github/searching-on-github/searching-issues-and-pull-requests) で書く. 前に `repo:<owner/name> is:pr is:open` を付けて検索するので, 対象は常にその repo の open PR になる. 最初の `=` で名前とクエリに分けるので, クエリに `=` が入ってもよい. 設定は起動時に読むので, 変えたら起動し直す. 書き間違えたクエリはエラーにならず 0 件になる.
 
 Devin session は Devin API v3 から直近 30 日に更新されたものを取り, PR の URL で照合する. 1 つの PR に複数あれば最新のものを使い, Devin 列に `×n` を付ける.
 

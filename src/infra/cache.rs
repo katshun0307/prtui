@@ -19,6 +19,16 @@ pub struct Cache {
     /// レビュータブの PR 一覧と, それを取得した時刻. 未取得なら None
     #[serde(default)]
     pub reviews: Option<(DateTime<Utc>, Vec<Pr>)>,
+    /// 追加のタブの PR 一覧. 起動時にはクエリが今の設定と一致するタブだけ戻す
+    #[serde(default)]
+    pub custom: Vec<CustomCache>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct CustomCache {
+    pub query: String,
+    pub fetched_at: DateTime<Utc>,
+    pub prs: Vec<Pr>,
 }
 
 /// `$XDG_CACHE_HOME/prtui/<owner>__<name>.json`. XDG_CACHE_HOME が無ければ `~/.cache`.

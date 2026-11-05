@@ -16,6 +16,16 @@ pub struct LocalState {
     pub reviewers: Vec<String>,
     /// git config `prtui.devin-token` と `prtui.devin-org`. どちらかが未設定なら None
     pub devin: Option<DevinConfig>,
+    /// git config `prtui.tab` の値. 自分タブとレビュータブの後ろに足すタブ
+    pub tabs: Vec<TabQuery>,
+}
+
+/// 追加のタブ 1 つ分. git config `prtui.tab` に `名前=検索クエリ` で書く
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TabQuery {
+    pub name: String,
+    /// GitHub の検索クエリ. 取得時に `repo:<owner/name> is:pr is:open` を前に付ける
+    pub query: String,
 }
 
 /// `gh pr checkout` の失敗が, ローカルの同名ブランチが PR と分岐していて fast-forward できないためか.
@@ -51,9 +61,22 @@ pub(crate) fn parse_reviewers(s: &str) -> Vec<String> {
     out
 }
 
+/// `git config --get-all prtui.tab` の出力をタブの並びにする. 1 行が 1 タブで, 最初の `=` で
+/// 名前とクエリに分ける. `=` が無い行と, 名前かクエリが空の行は捨てる
+pub(crate) fn parse_tabs(s: &str) -> Vec<TabQuery> {
+    s.lines()
+        .filter_map(|l| l.split_once('='))
+        .map(|(name, query)| TabQuery {
+            name: name.trim().to_string(),
+            query: query.trim().to_string(),
+        })
+        .filter(|t| !t.name.is_empty() && !t.query.is_empty())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_reviewers;
+    use super::{TabQuery, parse_reviewers, parse_tabs};
 
     #[test]
     fn reviewers_from_comma_and_multiple_values() {
@@ -78,5 +101,23 @@ mod tests {
             "fatal: Not possible to fast-forward, aborting."
         ));
         assert!(!super::is_diverged("gh pr: could not find pull request"));
+    }
+
+    #[test]
+    fn tabs_split_at_first_equal() {
+        let tab = |name: &str, query: &str| TabQuery {
+            name: name.into(),
+            query: query.into(),
+        };
+        assert_eq!(
+            parse_tabs(
+                "マージ予定=label:マージ予定\n 承認待ち = review:required a=b \nno-equal\n=q\nname=\n"
+            ),
+            vec![
+                tab("マージ予定", "label:マージ予定"),
+                tab("承認待ち", "review:required a=b"),
+            ]
+        );
+        assert!(parse_tabs("").is_empty());
     }
 }

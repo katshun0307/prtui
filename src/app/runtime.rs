@@ -16,10 +16,10 @@ use super::event::{Action, Effect, Event, WatchUntil};
 use super::state::AppState;
 use super::update;
 use crate::domain::devin::DevinConfig;
-use crate::infra::cache::{self, Cache};
+use crate::infra::cache::{self, Cache, CustomCache};
 use crate::infra::devin::{fetch_messages, fetch_sessions, send_message};
 use crate::infra::gh::{
-    self, fetch_pr, fetch_prs, fetch_reviews, linear_review_url, update_branch,
+    self, fetch_custom, fetch_pr, fetch_prs, fetch_reviews, linear_review_url, update_branch,
 };
 use crate::infra::git::read_local_state;
 use crate::infra::process::{copy_to_clipboard, open_url};
@@ -52,6 +52,13 @@ impl App {
                 state.review.fetched_at = Some(at);
                 state.review.from_cache = true;
                 state.review.prs = prs;
+            }
+            for t in &mut state.custom {
+                if let Some(c) = c.custom.iter().find(|c| c.query == t.query) {
+                    t.list.fetched_at = Some(c.fetched_at);
+                    t.list.from_cache = true;
+                    t.list.prs = c.prs.clone();
+                }
             }
             state.devin_sessions = c.devin_sessions;
         }
@@ -127,6 +134,12 @@ impl App {
                 }
                 Effect::FetchReviews => {
                     self.spawn(|dir, repo| Event::FetchedReviews(fetch_reviews(dir, repo)))
+                }
+                Effect::FetchCustom(i) => {
+                    let query = self.state.custom[i].query.clone();
+                    self.spawn(move |dir, repo| {
+                        Event::FetchedCustom(i, fetch_custom(dir, repo, &query))
+                    })
                 }
                 Effect::ReloadLocal => self.reload_local(),
                 Effect::SaveCache => self.save_cache(),
@@ -253,6 +266,18 @@ impl App {
             prs: mine.prs.clone(),
             devin_sessions: self.state.devin_sessions.clone(),
             reviews: review.fetched_at.map(|at| (at, review.prs.clone())),
+            custom: self
+                .state
+                .custom
+                .iter()
+                .filter_map(|t| {
+                    Some(CustomCache {
+                        query: t.query.clone(),
+                        fetched_at: t.list.fetched_at?,
+                        prs: t.list.prs.clone(),
+                    })
+                })
+                .collect(),
         };
         if let Err(e) = cache::save(&self.state.repo, &cache) {
             self.state.error(format!("キャッシュの保存失敗: {e}"));

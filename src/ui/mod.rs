@@ -3,7 +3,7 @@ use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 
-use crate::app::{AppState, Tab};
+use crate::app::AppState;
 use crate::domain::devin::{DevinSession, DevinStatus};
 
 mod chat;
@@ -61,7 +61,9 @@ pub fn draw(f: &mut Frame, state: &mut AppState) {
         draw_chat(f, state);
         return;
     }
-    let [header, list, detail, footer] = Layout::vertical([
+    // タブは設定で増えるので, ヘッダとは別の行に並べて切れないようにする
+    let [header, tabs, list, detail, footer] = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(5),
         Constraint::Length(10),
@@ -70,6 +72,7 @@ pub fn draw(f: &mut Frame, state: &mut AppState) {
     .areas(f.area());
 
     f.render_widget(header_line(state), header);
+    f.render_widget(Line::from(tab_spans(state)), tabs);
     draw_table(f, state, list);
     f.render_widget(detail_view(state), detail);
     f.render_widget(footer_line(state), footer);
@@ -84,7 +87,6 @@ fn header_line(state: &AppState) -> Line<'static> {
         Span::raw(format!("{}  ", state.dir.display())).fg(DIM),
         Span::raw(format!("branch: {}  ", state.local.current_branch)).cyan(),
     ];
-    spans.extend(tab_spans(state));
     let list = state.list();
     if let Some(t) = list.fetched_at {
         let label = if list.from_cache {
@@ -103,25 +105,22 @@ fn header_line(state: &AppState) -> Line<'static> {
     Line::from(spans)
 }
 
-/// `[1 自分 (n)] 2 レビュー (m)`. 今のタブは反転して強調し, 他は DIM
+/// ` [1 自分 (n)] 2 レビュー (m) 3 <追加のタブ> (k)`. 今のタブは反転して強調し, 他は DIM
 fn tab_spans(state: &AppState) -> Vec<Span<'static>> {
-    Tab::ALL
-        .iter()
-        .enumerate()
-        .map(|(i, &tab)| {
-            let text = format!(
-                " {} {} ({}) ",
-                i + 1,
-                tab.label(),
-                state.list_of(tab).prs.len()
-            );
-            if tab == state.tab {
-                Span::raw(text).bold().reversed()
-            } else {
-                Span::raw(text).fg(DIM)
-            }
-        })
-        .collect()
+    let tabs = state.tabs().into_iter().enumerate().map(|(i, tab)| {
+        let text = format!(
+            " {} {} ({}) ",
+            i + 1,
+            state.tab_label(tab),
+            state.list_of(tab).prs.len()
+        );
+        if tab == state.tab {
+            Span::raw(text).bold().reversed()
+        } else {
+            Span::raw(text).fg(DIM)
+        }
+    });
+    std::iter::once(Span::raw(" ")).chain(tabs).collect()
 }
 
 fn footer_line(state: &AppState) -> Line<'static> {
@@ -169,8 +168,6 @@ fn footer_line(state: &AppState) -> Line<'static> {
         return Line::from(if m.is_error { span.red() } else { span.green() });
     }
     const MINE: &[(&str, &str)] = &[
-        ("j/k", "移動"),
-        ("Tab/1/2", "タブ"),
         ("Enter", "checkout"),
         ("c", "コピー"),
         ("u", "main 取込"),
@@ -187,10 +184,8 @@ fn footer_line(state: &AppState) -> Line<'static> {
         ("r", "更新"),
         ("q", "終了"),
     ];
-    // 他人の PR を変える操作は出さない
+    // 他人の PR を変える操作は出さない. 追加のタブも同じ
     const REVIEW: &[(&str, &str)] = &[
-        ("j/k", "移動"),
-        ("Tab/1/2", "タブ"),
         ("Enter", "checkout"),
         ("c", "コピー"),
         ("d", "diff"),
@@ -203,13 +198,17 @@ fn footer_line(state: &AppState) -> Line<'static> {
         ("r", "更新"),
         ("q", "終了"),
     ];
-    let keys = match state.tab {
-        Tab::Mine => MINE,
-        Tab::Review => REVIEW,
+    let keys = if state.tab.is_readonly() {
+        REVIEW
+    } else {
+        MINE
     };
+    // 数字キーは 9 までのタブにしか届かない
+    let tab_key = format!("Tab/1-{}", state.tabs().len().min(9));
+    let head = [("j/k", "移動"), (tab_key.as_str(), "タブ")];
     let mut spans = vec![Span::raw(" ")];
-    for &(key, label) in keys {
-        spans.push(Span::raw(key).cyan());
+    for &(key, label) in head.iter().chain(keys) {
+        spans.push(Span::raw(key.to_string()).cyan());
         spans.push(Span::raw(format!(" {label}  ")).fg(DIM));
     }
     Line::from(spans)

@@ -88,5 +88,36 @@ pub fn run(dir: PathBuf, repo: &str) -> Result<()> {
             p.title,
         );
     }
+    // 追加のタブ. 失敗したタブはエラーを出して次のタブに進む
+    for t in &local.tabs {
+        println!("# {}: {}", t.name, t.query);
+        let prs = match gh::fetch_custom(&dir, repo, &t.query) {
+            Ok(prs) => prs,
+            Err(e) => {
+                eprintln!("{} の取得失敗: {e}", t.name);
+                continue;
+            }
+        };
+        for p in prs {
+            let reviewers = p
+                .reviewers
+                .iter()
+                .map(|r| format!("{}:{:?}", r.name, r.state))
+                .collect::<Vec<_>>()
+                .join(",");
+            println!(
+                "#{}\tauthor={}\tassignees={}\tdraft={}\tbehind_main={}\treview={}\treviewers={reviewers}\tlocal={}\t{}\t{}",
+                p.number,
+                p.author,
+                p.assignees.join(","),
+                p.is_draft,
+                p.behind_main.map_or("-".into(), |b| b.to_string()),
+                p.review_decision.as_deref().unwrap_or("-"),
+                local.sync_label(&p).unwrap_or("-"),
+                ui::format::ago(p.updated_at),
+                p.title,
+            );
+        }
+    }
     Ok(())
 }

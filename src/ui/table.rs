@@ -15,6 +15,7 @@ pub(super) fn draw_table(f: &mut Frame, state: &mut AppState, area: ratatui::lay
     let (header, widths, rows) = match state.tab {
         Tab::Mine => mine_rows(state),
         Tab::Review => review_rows(state),
+        Tab::Custom(_) => custom_rows(state),
     };
     let title = table_title(state, rows.len());
     let table = Table::new(rows, widths)
@@ -147,6 +148,78 @@ fn review_rows(state: &AppState) -> Columns<'static> {
         Constraint::Fill(1),
     ];
     (header, widths, rows)
+}
+
+/// 追加のタブ. 自分と他人の PR が混ざるので Author と Assignee を出す. マージの判断に使うことが多いので
+/// main と Review を出す. stack はまとめないので Stack は出さない
+fn custom_rows(state: &AppState) -> Columns<'static> {
+    let rows = state
+        .visible()
+        .into_iter()
+        .map(|p| {
+            Row::new(vec![
+                Cell::from(format!("#{}", p.number)),
+                state_cell(p),
+                ci_cell(p),
+                threads_cell(p),
+                behind_cell(p),
+                size_cell(p),
+                review_cell(p),
+                reviewer_cell(p),
+                Cell::from(p.author.clone()),
+                assignee_cell(p),
+                local_cell(&state.local, p),
+                Cell::from(devin_span(state.devin_for(p))),
+                Cell::from(ago(p.updated_at)).fg(DIM),
+                Cell::from(p.title.clone()),
+            ])
+        })
+        .collect();
+    let header = vec![
+        "#",
+        "状態",
+        "CI",
+        "未解決",
+        "main",
+        "差分",
+        "Review",
+        "Reviewer",
+        "Author",
+        "Assignee",
+        "Local",
+        "Devin",
+        "更新",
+        "タイトル",
+    ];
+    let widths = vec![
+        Constraint::Length(6),
+        Constraint::Length(8),
+        Constraint::Length(7),
+        Constraint::Length(6),
+        Constraint::Length(5),
+        Constraint::Length(12),
+        Constraint::Length(9),
+        Constraint::Length(13),
+        Constraint::Length(12),
+        Constraint::Length(12),
+        Constraint::Length(10),
+        Constraint::Length(11),
+        Constraint::Length(4),
+        Constraint::Fill(1),
+    ];
+    (header, widths, rows)
+}
+
+/// 先頭の assignee と残りの人数 `alice +1`. 全員は詳細欄に出す. 居なければ DIM の `-`
+fn assignee_cell(p: &Pr) -> Cell<'static> {
+    match p.assignees.as_slice() {
+        [] => Cell::from("-").fg(DIM),
+        [one] => Cell::from(one.clone()),
+        [first, rest @ ..] => Cell::from(Line::from(vec![
+            Span::raw(first.clone()),
+            Span::raw(format!(" +{}", rest.len())).fg(DIM),
+        ])),
+    }
 }
 
 /// ` PR n 件 (更新中…) `. 取得に失敗していれば赤でエラーを足す

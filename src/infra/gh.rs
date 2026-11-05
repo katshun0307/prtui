@@ -6,10 +6,10 @@ use crate::domain::linear::{REVIEW_LINK_MARK, extract_review_url};
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
 use crate::domain::review::arrange_reviews;
-use crate::domain::stack::arrange;
+use crate::domain::stack::{arrange, arrange_flat};
 use crate::infra::graphql::{
-    FRAGMENT, FRAGMENT_REQUESTED, QUERY, QUERY_ONE, QUERY_REVIEW, parse_one, parse_review,
-    parse_search,
+    FRAGMENT, FRAGMENT_REQUESTED, QUERY, QUERY_CUSTOM, QUERY_ONE, QUERY_REVIEW, parse_custom,
+    parse_one, parse_review, parse_search,
 };
 use crate::infra::process::run;
 
@@ -74,6 +74,24 @@ pub fn fetch_reviews(dir: &Path, repo: &str) -> Result<Vec<Pr>> {
         ],
     )?;
     Ok(arrange_reviews(parse_review(&out)?))
+}
+
+/// 追加のタブ. repo の open PR のうち `query` (GitHub の検索クエリ) に当たるものを
+/// 更新日時の降順で返す. 他人の PR が混ざるので stack はまとめない.
+pub fn fetch_custom(dir: &Path, repo: &str, query: &str) -> Result<Vec<Pr>> {
+    let out = run(
+        dir,
+        "gh",
+        &[
+            "api",
+            "graphql",
+            "-f",
+            &format!("query={QUERY_CUSTOM}{FRAGMENT}"),
+            "-f",
+            &format!("q=repo:{repo} is:pr is:open {query}"),
+        ],
+    )?;
+    Ok(arrange_flat(parse_custom(&out)?))
 }
 
 /// PR を 1 件だけ取り直す. open でなくなっていれば None.

@@ -38,7 +38,15 @@
   - 並び: 依頼中 (再依頼を含む) を先に, その中は依頼を受けた時刻の古い順 (古い依頼から片付けるため. ユーザーの指定). 依頼時刻が分からなければ更新日時で代える. レビュー済みはその後ろに更新日時の降順. stack はまとめない
   - 依頼時刻: `reviewRequests` に時刻が無いので, 依頼中側の alias だけ `FRAGMENT_REQUESTED` で `timelineItems(last:50, itemTypes:[REVIEW_REQUESTED_EVENT])` を取る. 直接の依頼なら自分宛ての最新の event (再依頼なら最後の依頼) を `MyReview::requested_at` にする. チーム経由なら, 今依頼されているチームごとの最新の event のうち最も古いものを使う. 所属チームで絞れず全チームに戻ったときに, 後から関係ないチームが依頼されても待ち時間を短く見せないため (サブエージェントのレビューの指摘). 依頼時刻が同じなら番号の昇順. 一覧の「依頼」列に経過時間を yellow で出す
   - 操作: `Enter`, `c`, `d`, `o`, `l`, `L`, `v`, `t`, `r` は使える. 他人の PR を変える `u` / `O` / `DD` / `XX` / `RR` は無効にし, `<key> はレビュータブでは使えない` を出す (ユーザーの指定)
-  - Devin Review: `V` で `https://app.devin.ai/review/<owner>/<name>/pull/<n>` を `open` で開く. repo と PR 番号だけで組み立てるので, Devin の設定 (token, org) も API も要らない. ユーザーの指定でレビュータブだけにした. 自分タブでは何もしない
+  - Devin Review: `V` で `https://app.devin.ai/review/<owner>/<name>/pull/<n>` を `open` で開く. repo と PR 番号だけで組み立てるので, Devin の設定 (token, org) も API も要らない. ユーザーの指定でレビュータブだけにした. 自分タブでは何もしない. 追加のタブはレビュータブに合わせて使えるようにした
+- 追加のタブ: git config `prtui.tab` に書いた検索クエリで, 自分タブとレビュータブの後ろにタブを足す (2026-11-05 追加. 仕様はユーザーと質疑で決めた. 例はラベル `マージ予定` の open PR の一覧)
+  - 設定: `git config --add prtui.tab '<名前>=<検索クエリ>'` で 1 タブずつ足す (`prtui.reviewers` と同じ複数値のキー. 書き方はユーザーの指定で git config). 最初の `=` で名前とクエリに分ける. `=` が無い値と, 名前かクエリが空の値は捨てる. タブは `--get-all` の順 (書いた順) に並べる. タブの並びは起動時の設定で決め, 実行中に設定を変えても再起動まで反映しない. タブごとのセクション (`[prtui "tab.<名前>"]`) にする案は, 今の用途では書く量が増えるだけなので採らなかった
+  - 対象: `repo:<owner/name> is:pr is:open <クエリ>` の search (`QUERY_CUSTOM`, `first:100`). 1 件の取り直しと操作が open を前提にしているので `is:open` は外せない. 自分の PR も除かない. GitHub の search は解釈できないクエリでもエラーにせず 0 件を返す
+  - 取得: タブごとに別スレッドで, 自分タブと同じタイミング (起動時, 5 分ごと, `r`). 失敗はそのタブの一覧のタイトルに赤で出す. キャッシュは同じファイルの `custom` にクエリと取得時刻と一緒に入れ, 起動時はクエリが今の設定と一致するタブだけ戻す
+  - 並び: 更新日時の降順 (`arrange_flat`). 他人の PR が混ざるので stack はまとめない
+  - 切り替え: `Tab` / `Shift-Tab` で順に回し (端で反対の端に回る), `1`〜`9` で直接選ぶ. 10 個目以降は `Tab` でだけ選べる. タブ欄はヘッダの下の独立した行に出す (ヘッダの 1 行目に並べるとブランチ名が長いときに 3 つ目以降が画面外に切れたため)
+  - 操作: レビュータブと同じ (ユーザーの指定). `u` / `O` / `DD` / `XX` / `RR` は無効にし `<key> は<名前>タブでは使えない` を出す. `V` (Devin Review) は使える
+  - 列: `# 状態 CI 未解決 main 差分 Review Reviewer Author Assignee Local Devin 更新 タイトル`. マージの判断に使うことが多いので main と Review を出し, 自分と他人の PR が混ざるので Author と Assignee を出す (Assignee はユーザーの指定). Assignee は先頭の 1 人と `+n` (DIM). Stack は stack をまとめないので, レビュータブの自分と依頼はこのクエリで取らないので出さない. ラベルは絞り込みに使うことが多く重複するので一覧には出さない (詳細欄の `labels:` にはある)
 - 実装: Rust (edition 2024), ratatui 0.30 (crossterm は `ratatui::crossterm` の re-export を使う), serde, anyhow, chrono. GitHub と git は `gh` と `git` コマンドを `std::process::Command` で呼ぶ. 非同期 runtime は使わず, 時間のかかる処理はスレッド + mpsc で UI をブロックしない
 
 ## 構成
@@ -49,14 +57,14 @@
 |---|---|
 | `src/main.rs` | 引数処理 (`-C`, `--dump`), 端末初期化, イベントループ, 外部コマンド実行時の TUI 一時停止 |
 | `src/dump.rs` | `--dump` のテキスト出力 |
-| `src/domain/` | 純粋な型と関数. `pr.rs` (`Pr`, `MyReview`), `stack.rs` (`arrange`, `group_stacks`), `review.rs` (`review_targets`, `arrange_reviews`), `linear.rs` (issue キーと review URL の抽出), `copy.rs` (`copy_items`), `local.rs` (`LocalState`, `parse_reviewers`), `op.rs` (`PrOp`), `devin.rs` (Devin の型と `session_for`, `review_url`) |
+| `src/domain/` | 純粋な型と関数. `pr.rs` (`Pr`, `MyReview`), `stack.rs` (`arrange`, `arrange_flat`, `group_stacks`), `review.rs` (`review_targets`, `arrange_reviews`), `linear.rs` (issue キーと review URL の抽出), `copy.rs` (`copy_items`), `local.rs` (`LocalState`, `parse_reviewers`, `TabQuery`, `parse_tabs`), `op.rs` (`PrOp`), `devin.rs` (Devin の型と `session_for`, `review_url`) |
 | `src/infra/process.rs` | コマンド実行ヘルパ `run`, `open_url` |
 | `src/infra/git.rs` | メイン worktree の解決 `main_worktree`, `read_local_state` (現在ブランチ, dirty, refs/heads の oid, git config) |
-| `src/infra/gh.rs` | gh コマンド. 全件取得 `fetch_prs`, レビュータブの `fetch_reviews`, 1 件取得 `fetch_pr`, `update_branch`, `checkout`, `change_state`, `view_web`, `linear_review_url` |
+| `src/infra/gh.rs` | gh コマンド. 全件取得 `fetch_prs`, レビュータブの `fetch_reviews`, 追加のタブの `fetch_custom`, 1 件取得 `fetch_pr`, `update_branch`, `checkout`, `change_state`, `view_web`, `linear_review_url` |
 | `src/infra/graphql.rs` | GraphQL クエリ, `Raw*` 型と `Pr` への変換, JSON の解析 `parse_search` / `parse_review` / `parse_one` |
 | `src/infra/devin.rs` | Devin API v3 (`fetch_sessions`, `fetch_messages`, `send_message`) を curl で呼ぶ. JSON の解析 `parse_*` |
 | `src/infra/cache.rs` | PR 一覧と Devin session 一覧のディスクキャッシュの読み書き |
-| `src/app/state.rs` | 全状態 `AppState`, タブ `Tab` とタブごとの一覧 `PrList`, 会話ビューの `ChatView` |
+| `src/app/state.rs` | 全状態 `AppState`, タブ `Tab` とタブごとの一覧 `PrList`, 追加のタブ `CustomTab`, 会話ビューの `ChatView` |
 | `src/app/event.rs` | `Event` (スレッドの結果), `Effect` (副作用の要求), `Action` (main への指示), `WatchUntil` |
 | `src/app/update.rs` | キー操作, イベント処理, 時間の遷移 (`tick`). `AppState` を更新して `Vec<Effect>` を返す純粋関数 |
 | `src/app/runtime.rs` | `App`. Effect を実行し, スレッドの起動と infra の呼び出しをここに閉じる |
@@ -113,6 +121,7 @@ refactor 前は 1 つの `App` に状態, キー判断, スレッド起動, gh �
 - 2026-11-02: Bot (devin-ai-integration など) のレビューを reviewer から外した. GitHub の Reviewers 欄に出ず, ✎n に数えると誤解を招くため
 - 2026-11-02: チェックアウトがブランチの分岐で失敗したら y/N を聞き, `--force` で PR の最新に合わせるようにした. `cargo test` で状態遷移だけ確認し, 実際の `--force` は未実行
 - 2026-11-02: `c` をコピー選択画面にした. 検証用 repo の tmux 表示でポップアップの桁揃えと, `m` で Markdown リンクが `pbpaste` に入ることを確認. `cargo test` 109 件通過
+- 2026-11-05: 追加のタブ (`prtui.tab`) を足した. clippy 0 件, fmt 通過, `cargo test` 121 件通過. 検証用 repo の設定は書き換えず `GIT_CONFIG_COUNT` の環境変数で `マージ予定=label:マージ予定` を渡し, `--dump` の `# マージ予定` 節に該当の 1 件が出ること, tmux でタブ欄, 列, `3` と `Tab` での切り替え, `u` のエラー表示, 再起動後にキャッシュから件数が出ることを確認
 - 2026-11-02: 一覧の `j`/`k`/矢印の移動を, 端を越えたら反対の端に回るようにした (ユーザーの指定). 会話ビューのスクロールは回さない
 
 ## 未確認
@@ -143,4 +152,5 @@ refactor 前は 1 つの `App` に状態, キー判断, スレッド起動, gh �
 - stacked PR の main 列は main との差なので, 親の変更を取り込めているかは分からない
 - PR が 100 件を超えると search の `first:100` で切れる. レビュータブの `reviewed-by:@me` は close されるまで残るので, 長く open のままの PR が溜まりうる
 - Devin session は直近 30 日に更新されたもので, 最大 1000 件しか見ない. それより古い session の PR は Devin 列が空になる
+- 自分タブで操作した PR の取り直し (`Reloaded`) は自分タブだけを差し替える. 同じ PR が追加のタブやレビュータブにも出ていれば, 次の全件取得まで古いまま
 - 詳細欄は高さ 10 で固定. CI の失敗と実行中の行と devin 行が全部出ると URL の行が欄からはみ出ることがある

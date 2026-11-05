@@ -62,24 +62,22 @@ pub enum Tab {
     Mine,
     /// 自分にレビューが依頼されているか, 自分がレビューした PR
     Review,
+    /// git config `prtui.tab` で足したタブ. `AppState::custom` の位置
+    Custom(usize),
 }
 
 impl Tab {
-    pub const ALL: [Tab; 2] = [Tab::Mine, Tab::Review];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Tab::Mine => "自分",
-            Tab::Review => "レビュー",
-        }
+    /// 他人の PR が混ざるタブ. PR を変える操作 (u, O, DD, XX, RR) は自分タブでしか使わない
+    pub fn is_readonly(self) -> bool {
+        self != Tab::Mine
     }
+}
 
-    pub fn next(self) -> Tab {
-        match self {
-            Tab::Mine => Tab::Review,
-            Tab::Review => Tab::Mine,
-        }
-    }
+/// git config `prtui.tab` で足したタブ. 設定は起動時に読んだものを使う
+pub struct CustomTab {
+    pub name: String,
+    pub query: String,
+    pub list: PrList,
 }
 
 /// タブ 1 つ分の一覧. 取得, 選択位置, 絞り込みはタブごとに持つ
@@ -152,6 +150,8 @@ pub struct AppState {
     /// 自分タブ. 操作 (u, O, DD, XX, RR) と 1 件の取り直しはこちらだけが対象
     pub mine: PrList,
     pub review: PrList,
+    /// 追加のタブ. 自分タブとレビュータブの後ろに並べる
+    pub custom: Vec<CustomTab>,
     pub local: LocalState,
     pub message: Option<Message>,
     pub busy: Option<String>,
@@ -183,6 +183,15 @@ impl AppState {
             tab: Tab::Mine,
             mine: PrList::new(),
             review: PrList::new(),
+            custom: local
+                .tabs
+                .iter()
+                .map(|t| CustomTab {
+                    name: t.name.clone(),
+                    query: t.query.clone(),
+                    list: PrList::new(),
+                })
+                .collect(),
             local,
             message: None,
             busy: None,
@@ -206,6 +215,7 @@ impl AppState {
         match self.tab {
             Tab::Mine => &mut self.mine,
             Tab::Review => &mut self.review,
+            Tab::Custom(i) => &mut self.custom[i].list,
         }
     }
 
@@ -213,6 +223,23 @@ impl AppState {
         match tab {
             Tab::Mine => &self.mine,
             Tab::Review => &self.review,
+            Tab::Custom(i) => &self.custom[i].list,
+        }
+    }
+
+    /// 並び順のタブ. 自分, レビュー, 追加のタブの順
+    pub fn tabs(&self) -> Vec<Tab> {
+        [Tab::Mine, Tab::Review]
+            .into_iter()
+            .chain((0..self.custom.len()).map(Tab::Custom))
+            .collect()
+    }
+
+    pub fn tab_label(&self, tab: Tab) -> &str {
+        match tab {
+            Tab::Mine => "自分",
+            Tab::Review => "レビュー",
+            Tab::Custom(i) => &self.custom[i].name,
         }
     }
 

@@ -7,7 +7,7 @@ use chrono::Utc;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::event::{Effect, Event, WatchUntil};
-use super::state::{AppState, ChatView, Tab};
+use super::state::{AppState, ChatView, PrList};
 use crate::domain::copy::{CopyItem, copy_items};
 use crate::domain::devin::review_url;
 use crate::domain::linear::{issue_url, linear_issue_key};
@@ -22,7 +22,7 @@ pub const AUTO_REFRESH: Duration = Duration::from_secs(300);
 /// 会話ビューを開いている間にメッセージを取り直す間隔
 pub const CHAT_POLL: Duration = Duration::from_secs(5);
 
-/// 両タブの全件を取り直す. 取得中のタブは飛ばす.
+/// 全タブの全件を取り直す. 取得中のタブは飛ばす.
 /// Devin を設定していれば session 一覧も取り直す. それぞれ独立に走らせる
 pub fn refresh(state: &mut AppState) -> Vec<Effect> {
     let mut effects = vec![];
@@ -35,11 +35,36 @@ pub fn refresh(state: &mut AppState) -> Vec<Effect> {
         state.review.loading = true;
         effects.push(Effect::FetchReviews);
     }
+    for (i, c) in state.custom.iter_mut().enumerate() {
+        if !c.list.loading {
+            c.list.loading = true;
+            effects.push(Effect::FetchCustom(i));
+        }
+    }
     if state.local.devin.is_some() && !state.sessions_loading {
         state.sessions_loading = true;
         effects.push(Effect::FetchSessions);
     }
     effects
+}
+
+/// 自分タブ以外の全件取得の結果を反映する. 失敗はフッターではなくそのタブの一覧に出し,
+/// 自分タブの表示を邪魔しない
+fn fetched_list(list: &mut PrList, res: anyhow::Result<Vec<Pr>>) -> Vec<Effect> {
+    list.loading = false;
+    match res {
+        Ok(prs) => {
+            list.fetched_at = Some(Utc::now());
+            list.from_cache = false;
+            list.error = None;
+            list.replace(prs);
+            vec![Effect::SaveCache]
+        }
+        Err(e) => {
+            list.error = Some(format!("取得失敗: {e}"));
+            vec![]
+        }
+    }
 }
 
 /// 時間で起きる遷移. main のループから毎回呼ぶ.
@@ -82,24 +107,11 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
                 }
             }
         }
-        // 失敗はフッターではなくレビュータブの一覧に出し, 自分タブの表示を邪魔しない
-        Event::FetchedReviews(res) => {
-            let list = &mut state.review;
-            list.loading = false;
-            match res {
-                Ok(prs) => {
-                    list.fetched_at = Some(Utc::now());
-                    list.from_cache = false;
-                    list.error = None;
-                    list.replace(prs);
-                    vec![Effect::SaveCache]
-                }
-                Err(e) => {
-                    list.error = Some(format!("取得失敗: {e}"));
-                    vec![]
-                }
-            }
-        }
+        Event::FetchedReviews(res) => fetched_list(&mut state.review, res),
+        Event::FetchedCustom(i, res) => match state.custom.get_mut(i) {
+            Some(c) => fetched_list(&mut c.list, res),
+            None => vec![],
+        },
         Event::Reloaded(n, res) => {
             state.syncing.remove(&n);
             match *res {
@@ -309,17 +321,25 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
     if let Some(items) = state.copy_menu.take() {
         return copy(state, items, key);
     }
-    if state.tab == Tab::Review
+    if state.tab.is_readonly()
         && let KeyCode::Char(c @ ('u' | 'O' | 'D' | 'X' | 'R')) = key.code
     {
-        state.error(format!("{c} はレビュータブでは使えない"));
+        state.error(format!(
+            "{c} は{}タブでは使えない",
+            state.tab_label(state.tab)
+        ));
         return vec![];
     }
     match key.code {
         KeyCode::Char('q') | KeyCode::Esc => vec![Effect::Quit],
-        KeyCode::Tab | KeyCode::BackTab => switch_tab(state, state.tab.next()),
-        KeyCode::Char('1') => switch_tab(state, Tab::Mine),
-        KeyCode::Char('2') => switch_tab(state, Tab::Review),
+        KeyCode::Tab => cycle_tab(state, 1),
+        KeyCode::BackTab => cycle_tab(state, -1),
+        KeyCode::Char(c @ '1'..='9') => {
+            if let Some(&tab) = state.tabs().get(c as usize - '1' as usize) {
+                state.tab = tab;
+            }
+            vec![]
+        }
         KeyCode::Char('u') => request_update(state),
         KeyCode::Char('O') => request_state(state, PrOp::Open),
         KeyCode::Char('D') => request_state(state, PrOp::Draft),
@@ -368,7 +388,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('l') => open_linear(state),
         KeyCode::Char('L') => open_linear_review(state),
         KeyCode::Char('v') => open_chat(state),
-        KeyCode::Char('V') if state.tab == Tab::Review => state
+        KeyCode::Char('V') if state.tab.is_readonly() => state
             .selected()
             .map(|p| Effect::OpenUrl(review_url(&state.repo, p.number)))
             .into_iter()
@@ -389,8 +409,11 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
-fn switch_tab(state: &mut AppState, tab: Tab) -> Vec<Effect> {
-    state.tab = tab;
+/// 端を越えたら反対の端に回る
+fn cycle_tab(state: &mut AppState, delta: isize) -> Vec<Effect> {
+    let tabs = state.tabs();
+    let cur = tabs.iter().position(|&t| t == state.tab).unwrap_or(0) as isize;
+    state.tab = tabs[(cur + delta).rem_euclid(tabs.len() as isize) as usize];
     vec![]
 }
 
@@ -652,7 +675,7 @@ mod tests {
     use crate::app::event::{Effect, Event, WatchUntil};
     use crate::app::state::{AppState, ChatView, Tab};
     use crate::domain::devin::{DevinConfig, DevinSession};
-    use crate::domain::local::LocalState;
+    use crate::domain::local::{LocalState, TabQuery};
     use crate::domain::op::PrOp;
     use crate::domain::pr::{Pr, Reviewer, ReviewerState};
 
@@ -940,8 +963,84 @@ mod tests {
         );
     }
 
+    fn custom_state(mine: Vec<Pr>, custom: Vec<Pr>) -> AppState {
+        let local = LocalState {
+            tabs: vec![TabQuery {
+                name: "マージ予定".into(),
+                query: "label:マージ予定".into(),
+            }],
+            ..Default::default()
+        };
+        let mut s = AppState::new(PathBuf::from("/tmp"), "o/r".into(), local);
+        s.mine.prs = mine;
+        s.custom[0].list.prs = custom;
+        s
+    }
+
     #[test]
-    fn devin_review_is_review_tab_only() {
+    fn custom_tab_switch_and_cycle() {
+        let mut s = custom_state(vec![pr(1)], vec![pr(20), pr(21)]);
+        handle_key(&mut s, key('3'));
+        assert_eq!(s.tab, Tab::Custom(0));
+        assert_eq!(s.selected().map(|p| p.number), Some(20));
+        // 無いタブの数字は何もしない
+        handle_key(&mut s, key('4'));
+        assert_eq!(s.tab, Tab::Custom(0));
+        handle_key(&mut s, code(KeyCode::Tab));
+        assert_eq!(s.tab, Tab::Mine);
+        handle_key(&mut s, KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+        assert_eq!(s.tab, Tab::Custom(0));
+        handle_key(&mut s, KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+        assert_eq!(s.tab, Tab::Review);
+    }
+
+    #[test]
+    fn custom_tab_rejects_mutating_ops_and_allows_browsing() {
+        let mut s = custom_state(vec![pr(1)], vec![pr(20)]);
+        s.local.reviewers = vec!["alice".into()];
+        handle_key(&mut s, key('3'));
+        for c in ['u', 'O', 'D', 'X', 'R'] {
+            assert!(handle_key(&mut s, key(c)).is_empty(), "{c}");
+            assert_eq!(
+                message(&s),
+                (&*format!("{c} はマージ予定タブでは使えない"), true)
+            );
+        }
+        assert_eq!(handle_key(&mut s, key('o')), vec![Effect::ViewWeb(20)]);
+        assert_eq!(
+            handle_key(&mut s, key('V')),
+            vec![Effect::OpenUrl(
+                "https://app.devin.ai/review/o/r/pull/20".into()
+            )]
+        );
+    }
+
+    #[test]
+    fn custom_tab_fetch() {
+        let mut s = custom_state(vec![], vec![pr(20)]);
+        assert_eq!(
+            refresh(&mut s),
+            vec![Effect::Fetch, Effect::FetchReviews, Effect::FetchCustom(0)]
+        );
+        // 取得中は出し直さない
+        assert_eq!(refresh(&mut s), vec![]);
+
+        let effects = handle_event(&mut s, Event::FetchedCustom(0, Err(anyhow!("boom"))));
+        assert!(effects.is_empty());
+        assert!(!s.custom[0].list.loading);
+        assert_eq!(s.custom[0].list.prs.len(), 1);
+        assert_eq!(s.custom[0].list.error.as_deref(), Some("取得失敗: boom"));
+        assert!(s.message.is_none());
+
+        s.custom[0].list.loading = true;
+        let effects = handle_event(&mut s, Event::FetchedCustom(0, Ok(vec![pr(21), pr(22)])));
+        assert_eq!(effects, vec![Effect::SaveCache]);
+        assert!(s.custom[0].list.error.is_none() && !s.custom[0].list.loading);
+        assert_eq!(s.custom[0].list.prs.len(), 2);
+    }
+
+    #[test]
+    fn devin_review_is_not_in_mine_tab() {
         let mut s = state(vec![pr(1)]);
         assert!(handle_key(&mut s, key('V')).is_empty());
     }

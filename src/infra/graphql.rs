@@ -25,6 +25,11 @@ pub(crate) const QUERY_REVIEW: &str = r#"query($requested:String!, $reviewed:Str
   reviewed: search(query:$reviewed, type:ISSUE, first:100) { nodes { ...pr } }
 }"#;
 
+/// 追加のタブ. 検索クエリはタブの設定から組み立てる
+pub(crate) const QUERY_CUSTOM: &str = r#"query($q:String!) {
+  search(query:$q, type:ISSUE, first:100) { nodes { ...pr } }
+}"#;
+
 /// 1 件だけ取り直すときのクエリ. close 済みかを見るため state も取る
 pub(crate) const QUERY_ONE: &str = r#"query($owner:String!, $name:String!, $number:Int!) {
   repository(owner:$owner, name:$name) { pullRequest(number:$number) { ...pr } }
@@ -237,6 +242,16 @@ struct Slug {
 }
 
 #[derive(Deserialize)]
+struct CustomResponse {
+    data: CustomData,
+}
+
+#[derive(Deserialize)]
+struct CustomData {
+    search: Nodes<RawPr>,
+}
+
+#[derive(Deserialize)]
 struct OneResponse {
     data: OneData,
 }
@@ -372,6 +387,19 @@ fn requested_at(r: &RawPr, viewer: &str, teams: &[String]) -> Option<DateTime<Ut
         .iter()
         .filter_map(|t| latest_for(&|x| x.slug.as_ref() == Some(t)))
         .min()
+}
+
+/// 追加のタブの検索結果を解析する. 並べ替えはしない
+pub(crate) fn parse_custom(json: &str) -> Result<Vec<Pr>> {
+    let resp: CustomResponse =
+        serde_json::from_str(json).context("GraphQL レスポンスの解析に失敗")?;
+    Ok(resp
+        .data
+        .search
+        .nodes
+        .into_iter()
+        .filter_map(convert)
+        .collect())
 }
 
 /// 1 件取得の結果を解析する. open でなくなっていれば None
@@ -699,6 +727,21 @@ mod tests {
     fn parse_search_error_message() {
         let err = parse_search("not json").unwrap_err();
         assert_eq!(err.to_string(), "GraphQL レスポンスの解析に失敗");
+    }
+
+    #[test]
+    fn parse_custom_skips_non_pr() {
+        let json = r#"{"data":{"search":{"nodes":[
+            {"number":3,"title":"c","assignees":{"nodes":[{"login":"alice"}]}},
+            {},
+            {"number":1,"title":"a"}
+        ]}}}"#;
+        let prs = parse_custom(json).unwrap();
+        let got: Vec<u64> = prs.iter().map(|p| p.number).collect();
+        // 並べ替えはしない
+        assert_eq!(got, vec![3, 1]);
+        assert_eq!(prs[0].assignees, vec!["alice"]);
+        assert!(prs[0].my_review.is_none());
     }
 
     #[test]
