@@ -19,9 +19,9 @@ use format::ago;
 use table::draw_table;
 
 /// 配色の意味
-/// - green: 問題なし (Ready, CI 成功, APPROVED, 承認した reviewer)
-/// - red: 壊れている (Conflict, CI 失敗, CHANGES_REQUESTED, 変更要求した reviewer)
-/// - yellow: 自分の対応が要る (未解決スレッド, REVIEW_REQUIRED, reviewer 未設定, 確認プロンプト)
+/// - green: 問題なし (Ready, CI 成功, 承認した reviewer)
+/// - red: 壊れている (Conflict, CI 失敗, 変更要求した reviewer)
+/// - yellow: 自分の対応が要る (未解決スレッド, reviewer 未設定, 確認プロンプト)
 ///   依頼中の reviewer も yellow にする. 返事待ちで, 催促するかを自分が判断するため
 ///   レビュータブの「自分」列も同じ意味で, 依頼中と再依頼は yellow, 承認済は green, 変更要求は red,
 ///   コメント済とレビュー済は DIM

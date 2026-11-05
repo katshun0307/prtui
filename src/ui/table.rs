@@ -52,7 +52,6 @@ fn mine_rows(state: &AppState) -> Columns<'static> {
                 threads_cell(p),
                 behind_cell(p),
                 size_cell(p),
-                review_cell(p),
                 reviewer_cell(p),
                 local_cell(&state.local, p),
                 Cell::from(devin_span(state.devin_for(p))),
@@ -69,7 +68,6 @@ fn mine_rows(state: &AppState) -> Columns<'static> {
         "未解決",
         "main",
         "差分",
-        "Review",
         "Reviewer",
         "Local",
         "Devin",
@@ -84,7 +82,6 @@ fn mine_rows(state: &AppState) -> Columns<'static> {
         Constraint::Length(6),
         Constraint::Length(5),
         Constraint::Length(12),
-        Constraint::Length(9),
         Constraint::Length(13),
         Constraint::Length(10),
         Constraint::Length(11),
@@ -151,8 +148,7 @@ fn review_rows(state: &AppState) -> Columns<'static> {
 }
 
 /// 追加のタブ. 自分と他人の PR が混ざるので Author と Assignee を出す. マージの判断に使うことが多いので
-/// main を出す. stack はまとめないので Stack は出さない. Review (`reviewDecision`) は必須レビューのルールが
-/// 無い repo では常に `-` なので出さず, 承認の状況は Reviewer で見る
+/// main を出す. stack はまとめないので Stack は出さない
 fn custom_rows(state: &AppState) -> Columns<'static> {
     let rows = state
         .visible()
@@ -333,15 +329,6 @@ fn size_cell(p: &Pr) -> Cell<'static> {
         Span::raw(" "),
         Span::raw(format!("-{}", p.deletions)).red(),
     ]))
-}
-
-fn review_cell(p: &Pr) -> Cell<'static> {
-    match p.review_decision.as_deref() {
-        Some("APPROVED") => Cell::from("APPROVED").green(),
-        Some("CHANGES_REQUESTED") => Cell::from("CHANGES").red(),
-        Some("REVIEW_REQUIRED") => Cell::from("REQUIRED").yellow(),
-        _ => Cell::from("-").fg(DIM),
-    }
 }
 
 /// 承認 ✓n, 変更要求 ✗n, 依頼中 ●n, コメントのみ ✎n を数で出す. Bot は reviewers に入らないので数えない.
