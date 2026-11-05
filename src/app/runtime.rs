@@ -46,22 +46,7 @@ impl App {
         let local = ports.git.read_local_state().unwrap_or_default();
         let mut state = AppState::new(dir, repo, local);
         if let Some(c) = cached {
-            state.mine.fetched_at = Some(c.fetched_at);
-            state.mine.from_cache = true;
-            state.mine.prs = c.prs;
-            if let Some((at, prs)) = c.reviews {
-                state.review.fetched_at = Some(at);
-                state.review.from_cache = true;
-                state.review.prs = prs;
-            }
-            for t in &mut state.custom {
-                if let Some(c) = c.custom.iter().find(|c| c.query == t.query) {
-                    t.list.fetched_at = Some(c.fetched_at);
-                    t.list.from_cache = true;
-                    t.list.prs = c.prs.clone();
-                }
-            }
-            state.devin_sessions = c.devin_sessions;
+            apply_cache(&mut state, c);
         }
         Self {
             state,
@@ -262,26 +247,7 @@ impl App {
     }
 
     fn save_cache(&mut self) {
-        let (mine, review) = (&self.state.mine, &self.state.review);
-        let cache = Cache {
-            fetched_at: mine.fetched_at.unwrap_or_else(Utc::now),
-            prs: mine.prs.clone(),
-            devin_sessions: self.state.devin_sessions.clone(),
-            reviews: review.fetched_at.map(|at| (at, review.prs.clone())),
-            custom: self
-                .state
-                .custom
-                .iter()
-                .filter_map(|t| {
-                    Some(CustomCache {
-                        query: t.query.clone(),
-                        fetched_at: t.list.fetched_at?,
-                        prs: t.list.prs.clone(),
-                    })
-                })
-                .collect(),
-        };
-        if let Err(e) = self.ports.cache.save(&cache) {
+        if let Err(e) = self.ports.cache.save(&snapshot(&self.state)) {
             self.state.error(format!("キャッシュの保存失敗: {e}"));
         }
     }
@@ -299,6 +265,60 @@ impl App {
         self.state.busy = Some(format!("#{n} をチェックアウト中…"));
         self.spawn(move |p| Event::CheckedOut(n, force, p.gh.checkout(n, force)));
     }
+
+    /// スレッドから Event が n 個届くまで待って反映する. 届かなければ 5 秒で落とす
+    #[cfg(test)]
+    fn pump_blocking(&mut self, n: usize) {
+        for _ in 0..n {
+            let ev = self
+                .rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("Event が届かない");
+            self.handle_event(ev);
+        }
+    }
+}
+
+/// キャッシュの一覧を状態に戻す. 追加のタブはクエリが今の設定と一致するものだけ戻す
+fn apply_cache(state: &mut AppState, c: Cache) {
+    state.mine.fetched_at = Some(c.fetched_at);
+    state.mine.from_cache = true;
+    state.mine.prs = c.prs;
+    if let Some((at, prs)) = c.reviews {
+        state.review.fetched_at = Some(at);
+        state.review.from_cache = true;
+        state.review.prs = prs;
+    }
+    for t in &mut state.custom {
+        if let Some(c) = c.custom.iter().find(|c| c.query == t.query) {
+            t.list.fetched_at = Some(c.fetched_at);
+            t.list.from_cache = true;
+            t.list.prs = c.prs.clone();
+        }
+    }
+    state.devin_sessions = c.devin_sessions;
+}
+
+/// キャッシュに書く内容. 未取得のレビュータブと追加のタブは書かない
+fn snapshot(state: &AppState) -> Cache {
+    let (mine, review) = (&state.mine, &state.review);
+    Cache {
+        fetched_at: mine.fetched_at.unwrap_or_else(Utc::now),
+        prs: mine.prs.clone(),
+        devin_sessions: state.devin_sessions.clone(),
+        reviews: review.fetched_at.map(|at| (at, review.prs.clone())),
+        custom: state
+            .custom
+            .iter()
+            .filter_map(|t| {
+                Some(CustomCache {
+                    query: t.query.clone(),
+                    fetched_at: t.list.fetched_at?,
+                    prs: t.list.prs.clone(),
+                })
+            })
+            .collect(),
+    }
 }
 
 /// Devin の config が無ければ API を呼ばずにエラーにする. 実行中に config を消されたときに備える
@@ -307,4 +327,319 @@ fn with_devin<T>(
     f: impl FnOnce(&DevinConfig) -> Result<T>,
 ) -> Result<T> {
     f(cfg.ok_or_else(|| anyhow!("Devin の設定が無い"))?)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    use chrono::{DateTime, Utc};
+    use pretty_assertions::assert_eq;
+
+    use super::{App, apply_cache, snapshot};
+    use crate::app::event::{Effect, WatchUntil};
+    use crate::app::ports::RuntimeConfig;
+    use crate::app::ports::fake::Fakes;
+    use crate::app::state::AppState;
+    use crate::domain::cache::{Cache, CustomCache};
+    use crate::domain::local::{LocalState, TabQuery};
+    use crate::domain::pr::Pr;
+
+    fn pr(n: u64) -> Pr {
+        let mut p = Pr::fixture(n, &format!("b{n}"), "main");
+        p.head_ref_oid = format!("oid{n}");
+        p
+    }
+
+    fn at(secs: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp(secs, 0).unwrap()
+    }
+
+    fn cfg(watch_tries: usize) -> RuntimeConfig {
+        RuntimeConfig {
+            watch_interval: Duration::ZERO,
+            watch_tries,
+            ..RuntimeConfig::default()
+        }
+    }
+
+    fn app(f: &Fakes) -> App {
+        App::with_ports(PathBuf::from("/tmp"), "o/r".into(), f.ports(), cfg(10))
+    }
+
+    fn tabs(queries: &[(&str, &str)]) -> LocalState {
+        LocalState {
+            tabs: queries
+                .iter()
+                .map(|(name, query)| TabQuery {
+                    name: (*name).into(),
+                    query: (*query).into(),
+                })
+                .collect(),
+            ..LocalState::default()
+        }
+    }
+
+    fn numbers(prs: &[Pr]) -> Vec<u64> {
+        prs.iter().map(|p| p.number).collect()
+    }
+
+    fn message(s: &AppState) -> (&str, bool) {
+        let m = s.message.as_ref().expect("message");
+        (&m.text, m.is_error)
+    }
+
+    /// `Pr` は PartialEq を持たないので JSON にして比べる
+    fn json(c: &Cache) -> serde_json::Value {
+        serde_json::to_value(c).unwrap()
+    }
+
+    #[test]
+    fn checkout_refused_when_dirty() {
+        let f = Fakes::default();
+        let mut a = app(&f);
+        f.git.local.lock().unwrap().dirty = true;
+        a.perform(vec![Effect::Checkout {
+            number: 1,
+            force: false,
+        }]);
+        assert!(f.gh.calls().is_empty());
+        assert!(a.state.busy.is_none());
+        assert_eq!(
+            message(&a.state),
+            (
+                "/tmp に未コミットの変更があるのでチェックアウトしない",
+                true
+            )
+        );
+    }
+
+    #[test]
+    fn checkout_runs_gh_when_clean() {
+        let f = Fakes::default();
+        let mut a = app(&f);
+        a.perform(vec![Effect::Checkout {
+            number: 1,
+            force: true,
+        }]);
+        assert_eq!(a.state.busy.as_deref(), Some("#1 をチェックアウト中…"));
+        a.pump_blocking(1);
+        assert_eq!(f.gh.calls(), vec!["checkout 1 true"]);
+        assert!(a.state.busy.is_none());
+        assert_eq!(
+            message(&a.state),
+            ("#1 を PR の最新に合わせてチェックアウトした", false)
+        );
+    }
+
+    #[test]
+    fn watch_immediately_fetches_once_and_replaces() {
+        let f = Fakes::default();
+        let mut a = app(&f);
+        a.state.mine.prs = vec![pr(1), pr(2)];
+        let mut new = pr(1);
+        new.title = "new".into();
+        f.gh.pr.lock().unwrap().push_back(Ok(Some(new)));
+        a.perform(vec![Effect::Watch {
+            number: 1,
+            until: WatchUntil::Immediately,
+        }]);
+        assert!(a.state.syncing.contains(&1));
+        a.pump_blocking(1);
+        assert_eq!(f.gh.calls(), vec!["fetch_pr 1"]);
+        assert!(a.state.syncing.is_empty());
+        assert_eq!(a.state.pr(1).map(|p| p.title.as_str()), Some("new"));
+        assert!(a.state.pr(2).is_some());
+        // 差し替えた一覧はキャッシュにも書く
+        let saved = f.cache.cache.lock().unwrap().clone().expect("saved");
+        assert_eq!(saved.prs.len(), 2);
+    }
+
+    #[test]
+    fn watch_retries_until_done() {
+        let f = Fakes::default();
+        let mut a = app(&f);
+        let mut draft = pr(1);
+        draft.is_draft = true;
+        a.state.mine.prs = vec![draft.clone()];
+        f.gh.pr
+            .lock()
+            .unwrap()
+            .extend([Ok(Some(draft.clone())), Ok(Some(draft)), Ok(Some(pr(1)))]);
+        a.perform(vec![Effect::Watch {
+            number: 1,
+            until: WatchUntil::NotDraft,
+        }]);
+        a.pump_blocking(1);
+        assert_eq!(f.gh.calls(), vec!["fetch_pr 1"; 3]);
+        assert_eq!(a.state.pr(1).map(|p| p.is_draft), Some(false));
+    }
+
+    #[test]
+    fn watch_stops_at_tries() {
+        let f = Fakes::default();
+        let mut a = App::with_ports(PathBuf::from("/tmp"), "o/r".into(), f.ports(), cfg(3));
+        let mut draft = pr(1);
+        draft.is_draft = true;
+        a.state.mine.prs = vec![draft.clone()];
+        f.gh.pr.lock().unwrap().push_back(Ok(Some(draft)));
+        a.perform(vec![Effect::Watch {
+            number: 1,
+            until: WatchUntil::NotDraft,
+        }]);
+        a.pump_blocking(1);
+        assert_eq!(f.gh.calls(), vec!["fetch_pr 1"; 3]);
+        // 上限に達したらその時点の結果を出す
+        assert_eq!(a.state.pr(1).map(|p| p.is_draft), Some(true));
+        assert!(a.state.syncing.is_empty());
+    }
+
+    #[test]
+    fn watch_stops_on_error() {
+        let f = Fakes::default();
+        let mut a = app(&f);
+        a.state.mine.prs = vec![pr(1)];
+        f.gh.pr.lock().unwrap().push_back(Err("boom".into()));
+        a.perform(vec![Effect::Watch {
+            number: 1,
+            until: WatchUntil::Gone,
+        }]);
+        a.pump_blocking(1);
+        assert_eq!(f.gh.calls(), vec!["fetch_pr 1"]);
+        assert_eq!(message(&a.state), ("#1 の再取得失敗: boom", true));
+        assert!(a.state.pr(1).is_some());
+    }
+
+    #[test]
+    fn copy_success_is_info() {
+        let f = Fakes::default();
+        let mut a = app(&f);
+        a.perform(vec![Effect::Copy("b1".into())]);
+        assert_eq!(*f.desktop.copied.lock().unwrap(), vec!["b1"]);
+        assert_eq!(message(&a.state), ("コピーした: b1", false));
+    }
+
+    #[test]
+    fn copy_failure_is_error() {
+        let f = Fakes::default();
+        let mut a = app(&f);
+        *f.desktop.fail.lock().unwrap() = Some("pbcopy: boom".into());
+        a.perform(vec![Effect::Copy("b1".into())]);
+        assert!(f.desktop.copied.lock().unwrap().is_empty());
+        assert_eq!(message(&a.state), ("コピー失敗: pbcopy: boom", true));
+    }
+
+    #[test]
+    fn open_url_failure_is_error() {
+        let f = Fakes::default();
+        let mut a = app(&f);
+        a.perform(vec![Effect::OpenUrl("https://example.com".into())]);
+        assert_eq!(
+            *f.desktop.opened.lock().unwrap(),
+            vec!["https://example.com"]
+        );
+        assert!(a.state.message.is_none());
+        *f.desktop.fail.lock().unwrap() = Some("open: boom".into());
+        a.perform(vec![Effect::OpenUrl("https://example.com".into())]);
+        assert_eq!(message(&a.state), ("open: boom", true));
+    }
+
+    #[test]
+    fn save_cache_writes_snapshot() {
+        let f = Fakes::default();
+        *f.git.local.lock().unwrap() = tabs(&[("a", "q1"), ("b", "q2")]);
+        let mut a = app(&f);
+        a.state.mine.prs = vec![pr(1), pr(2)];
+        a.state.mine.fetched_at = Some(at(100));
+        a.state.custom[0].list.prs = vec![pr(7)];
+        a.state.custom[0].list.fetched_at = Some(at(300));
+        a.perform(vec![Effect::SaveCache]);
+        let saved = f.cache.cache.lock().unwrap().clone().expect("saved");
+        assert_eq!(json(&saved), json(&snapshot(&a.state)));
+        assert_eq!(numbers(&saved.prs), vec![1, 2]);
+        // 未取得のレビュータブと追加のタブは書かない
+        assert!(saved.reviews.is_none());
+        let queries: Vec<&str> = saved.custom.iter().map(|c| c.query.as_str()).collect();
+        assert_eq!(queries, vec!["q1"]);
+    }
+
+    #[test]
+    fn with_ports_hydrates_from_cache() {
+        let f = Fakes::default();
+        *f.git.local.lock().unwrap() = tabs(&[("a", "q1"), ("b", "q2")]);
+        *f.cache.cache.lock().unwrap() = Some(Cache {
+            fetched_at: at(100),
+            prs: vec![pr(1)],
+            devin_sessions: vec![],
+            reviews: Some((at(200), vec![pr(3)])),
+            custom: vec![
+                CustomCache {
+                    query: "q1".into(),
+                    fetched_at: at(300),
+                    prs: vec![pr(5)],
+                },
+                // 設定から消えたクエリは戻さない
+                CustomCache {
+                    query: "old".into(),
+                    fetched_at: at(400),
+                    prs: vec![pr(6)],
+                },
+            ],
+        });
+        let a = app(&f);
+        let s = &a.state;
+        assert_eq!(numbers(&s.mine.prs), vec![1]);
+        assert_eq!(s.mine.fetched_at, Some(at(100)));
+        assert!(s.mine.from_cache);
+        assert_eq!(numbers(&s.review.prs), vec![3]);
+        assert_eq!(s.review.fetched_at, Some(at(200)));
+        assert!(s.review.from_cache);
+        assert_eq!(numbers(&s.custom[0].list.prs), vec![5]);
+        assert_eq!(s.custom[0].list.fetched_at, Some(at(300)));
+        assert!(s.custom[0].list.from_cache);
+        assert!(s.custom[1].list.prs.is_empty());
+        assert!(s.custom[1].list.fetched_at.is_none());
+        assert!(!s.custom[1].list.from_cache);
+        // with_ports は取得を始めない
+        assert!(f.gh.calls().is_empty());
+        assert!(!s.mine.loading);
+    }
+
+    #[test]
+    fn apply_cache_then_snapshot_round_trips() {
+        let c = Cache {
+            fetched_at: at(100),
+            prs: vec![pr(1), pr(2)],
+            devin_sessions: vec![],
+            reviews: Some((at(200), vec![pr(3)])),
+            custom: vec![CustomCache {
+                query: "q1".into(),
+                fetched_at: at(300),
+                prs: vec![pr(5)],
+            }],
+        };
+        let mut s = AppState::new(PathBuf::from("/tmp"), "o/r".into(), tabs(&[("a", "q1")]));
+        apply_cache(&mut s, c.clone());
+        assert_eq!(json(&snapshot(&s)), json(&c));
+    }
+
+    #[test]
+    fn fetch_updates_mine() {
+        let f = Fakes::default();
+        let mut a = app(&f);
+        a.state.mine.prs = vec![pr(1)];
+        a.state.mine.loading = true;
+        *f.gh.prs.lock().unwrap() = Ok(vec![pr(2), pr(3)]);
+        f.git.local.lock().unwrap().current_branch = "b2".into();
+        a.perform(vec![Effect::Fetch]);
+        // LocalState は同期で読み直す
+        assert_eq!(a.state.local.current_branch, "b2");
+        a.pump_blocking(1);
+        assert_eq!(f.gh.calls(), vec!["fetch_prs"]);
+        assert!(!a.state.mine.loading);
+        assert_eq!(numbers(&a.state.mine.prs), vec![2, 3]);
+        let saved = f.cache.cache.lock().unwrap().clone().expect("saved");
+        assert_eq!(numbers(&saved.prs), vec![2, 3]);
+    }
 }

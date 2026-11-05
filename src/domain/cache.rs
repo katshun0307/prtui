@@ -5,7 +5,7 @@ use crate::domain::devin::DevinSession;
 use crate::domain::pr::Pr;
 
 /// 前回取得した PR 一覧. 起動直後にこれを出し, 裏で取り直す
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Cache {
     pub fetched_at: DateTime<Utc>,
     pub prs: Vec<Pr>,
@@ -20,7 +20,7 @@ pub struct Cache {
     pub custom: Vec<CustomCache>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CustomCache {
     pub query: String,
     pub fetched_at: DateTime<Utc>,
