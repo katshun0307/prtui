@@ -1,0 +1,7 @@
+---
+source: src/dump.rs
+expression: "mine(&[a, b, c], &local(), &sessions())"
+---
+#1	stack=1/2	base=main	Ready	ok=1 fail=0 pending=0	threads=0/0	behind_main=0	size=+10/-1	review=APPROVED	reviewers=alice:Approved,bob:Commented	local=*最新	devin=running	2d	ABC-1 土台を足す
+#2	stack=2/2	base=feat-a	Draft	ok=0 fail=0 pending=1	threads=2/3	behind_main=-	size=+20/-2	review=-	reviewers=	local=差分あり	devin=suspended×2	2d	土台の上に画面を足す
+#3	stack=-	base=main	Conflict	ok=0 fail=1 pending=0	threads=0/0	behind_main=5	size=+30/-3	review=-	reviewers=carol:ChangesRequested	local=-	devin=-	10d	壊れたテストを直す

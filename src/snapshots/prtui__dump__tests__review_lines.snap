@@ -1,0 +1,8 @@
+---
+source: src/dump.rs
+expression: "review(&[a, b, c, d], &local(), &sessions())"
+---
+#11	author=alice	me=依頼中	requested=3d	via=-	draft=false	threads=0/0	local=-	devin=-	2d	依頼された PR
+#12	author=bob	me=再依頼	requested=-	via=backend,infra	draft=true	threads=0/0	local=差分あり	devin=-	2d	チーム経由で再依頼された PR
+#13	author=carol	me=承認済	requested=-	via=-	draft=false	threads=0/4	local=-	devin=-	2d	承認した PR
+#1	author=dave	me=-	requested=-	via=-	draft=false	threads=0/0	local=最新	devin=running	2d	my_review の無い PR
