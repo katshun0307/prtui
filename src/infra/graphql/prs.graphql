@@ -1,0 +1,4 @@
+query($author:String!, $assignee:String!) {
+  author: search(query:$author, type:ISSUE, first:100) { nodes { ...pr } }
+  assignee: search(query:$assignee, type:ISSUE, first:100) { nodes { ...pr } }
+}

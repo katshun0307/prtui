@@ -1,0 +1,6 @@
+---
+source: src/dump.rs
+expression: "custom(&[a, b], &local())"
+---
+#21	author=alice	assignees=	draft=false	behind_main=0	review=-	reviewers=bob:Requested	local=差分あり	2d	誰にも割り当てていない PR
+#22	author=katshun	assignees=bob,carol	draft=true	behind_main=12	review=REVIEW_REQUIRED	reviewers=	local=-	2d	2 人に割り当てた PR

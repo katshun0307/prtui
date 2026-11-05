@@ -1,0 +1,125 @@
+---
+source: src/ui/mod.rs
+expression: styles(&term)
+---
+ 0   0 " o/r " BOLD
+ 0   5 "/src/r  " fg=Indexed(245)
+ 0  13 "branch: feat-a  " fg=Cyan
+ 0  29 "  取得 5m 前" fg=Indexed(245)
+ 0  41 "  未コミットの変更あり" fg=Yellow
+ 1   1 " 1 自分 (4) " fg=Indexed(245)
+ 1  13 " 2 レビュー (6) " BOLD | REVERSED
+ 1  29 " 3 マージ予定 (3) " fg=Indexed(245)
+ 2   0 " PR 6 件 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────" fg=Indexed(245)
+ 3   0 "  #      状態     CI      未解決 差分         Author         自分       依頼 Reviewer      Local      Devin       更新 タイトル                                 " fg=Indexed(250) UNDERLINED
+ 4   9 "Ready   " fg=Green
+ 4  18 "-      " fg=Indexed(245)
+ 4  26 "0     " fg=Indexed(245)
+ 4  33 "+110" fg=Green
+ 4  38 "-11" fg=Red
+ 4  61 "依頼中    " fg=Yellow
+ 4  72 "3d  " fg=Yellow
+ 4  77 "●1 " fg=Yellow
+ 4 114 "2d  " fg=Indexed(245)
+ 5   0 "▶ " fg=Cyan bg=Indexed(237) BOLD
+ 5   2 "#12    " bg=Indexed(237)
+ 5   9 "Ready   " fg=Green bg=Indexed(237)
+ 5  17 " " bg=Indexed(237)
+ 5  18 "-      " fg=Indexed(245) bg=Indexed(237)
+ 5  25 " " bg=Indexed(237)
+ 5  26 "0     " fg=Indexed(245) bg=Indexed(237)
+ 5  32 " " bg=Indexed(237)
+ 5  33 "+120" fg=Green bg=Indexed(237)
+ 5  37 " " bg=Indexed(237)
+ 5  38 "-12" fg=Red bg=Indexed(237)
+ 5  41 "     bob            " bg=Indexed(237)
+ 5  61 "再依頼    " fg=Yellow bg=Indexed(237)
+ 5  71 " " bg=Indexed(237)
+ 5  72 "5h  " fg=Yellow bg=Indexed(237)
+ 5  76 " " bg=Indexed(237)
+ 5  77 "●1 " fg=Yellow bg=Indexed(237)
+ 5  80 "✎1" fg=Indexed(245) bg=Indexed(237)
+ 5  82 "                    " bg=Indexed(237)
+ 5 102 "error" fg=Indexed(245) bg=Indexed(237)
+ 5 107 "       " bg=Indexed(237)
+ 5 114 "2d  " fg=Indexed(245) bg=Indexed(237)
+ 5 118 " チーム経由で再依頼された PR              " bg=Indexed(237)
+ 6   9 "Ready   " fg=Green
+ 6  18 "-      " fg=Indexed(245)
+ 6  26 "0     " fg=Indexed(245)
+ 6  33 "+130" fg=Green
+ 6  38 "-13" fg=Red
+ 6  61 "承認済    " fg=Green
+ 6  77 "✓1 " fg=Green
+ 6  91 "● 差分あり" fg=Magenta
+ 6 114 "2d  " fg=Indexed(245)
+ 7   9 "Ready   " fg=Green
+ 7  18 "-      " fg=Indexed(245)
+ 7  26 "0     " fg=Indexed(245)
+ 7  33 "+140" fg=Green
+ 7  38 "-14" fg=Red
+ 7  61 "変更要求  " fg=Red
+ 7  77 "未設定 " fg=Yellow
+ 7 114 "2d  " fg=Indexed(245)
+ 8   9 "Ready   " fg=Green
+ 8  18 "-      " fg=Indexed(245)
+ 8  26 "0     " fg=Indexed(245)
+ 8  33 "+150" fg=Green
+ 8  38 "-15" fg=Red
+ 8  61 "コメント済" fg=Indexed(245)
+ 8  77 "未設定 " fg=Yellow
+ 8 114 "2d  " fg=Indexed(245)
+ 9   9 "Ready   " fg=Green
+ 9  18 "-      " fg=Indexed(245)
+ 9  26 "0     " fg=Indexed(245)
+ 9  33 "+160" fg=Green
+ 9  38 "-16" fg=Red
+ 9  61 "レビュー済" fg=Indexed(245)
+ 9  77 "未設定 " fg=Yellow
+ 9 114 "2d  " fg=Indexed(245)
+19   0 " 詳細 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────" fg=Indexed(245)
+20   0 "#12 " BOLD
+21   0 "branch: " fg=Indexed(245)
+21   8 "feat-y" fg=Cyan
+21  14 " ← " fg=Indexed(245)
+21  17 "main" fg=Cyan
+21  21 "  author: " fg=Indexed(245)
+21  34 "  assignees: " fg=Indexed(245)
+22   0 "+120" fg=Green
+22   5 "-12" fg=Red
+22  17 "  threads: " fg=Indexed(245)
+22  40 "  labels: " fg=Indexed(245)
+23   0 "reviewers: " fg=Indexed(245)
+23  11 "backend (依頼中)" fg=Yellow
+23  29 "katshun (コメント)" fg=Indexed(245)
+24   0 "依頼: " fg=Indexed(245)
+24   6 "backend 経由" fg=Yellow
+25   0 "devin: error" fg=Indexed(245)
+25  13 "https://app.devin.ai/sessions/devin-4" fg=Indexed(245) UNDERLINED
+26   0 "https://github.com/o/r/pull/12" fg=Indexed(245) UNDERLINED
+29   1 "j/k" fg=Cyan
+29   4 " 移動  " fg=Indexed(245)
+29  11 "Tab/1-3" fg=Cyan
+29  18 " タブ  " fg=Indexed(245)
+29  25 "Enter" fg=Cyan
+29  30 " checkout  " fg=Indexed(245)
+29  41 "c" fg=Cyan
+29  42 " コピー  " fg=Indexed(245)
+29  51 "d" fg=Cyan
+29  52 " diff  " fg=Indexed(245)
+29  59 "o" fg=Cyan
+29  60 " ブラウザ  " fg=Indexed(245)
+29  71 "l" fg=Cyan
+29  72 " Linear  " fg=Indexed(245)
+29  81 "L" fg=Cyan
+29  82 " Linear review  " fg=Indexed(245)
+29  98 "v" fg=Cyan
+29  99 " Devin  " fg=Indexed(245)
+29 107 "V" fg=Cyan
+29 108 " Devin Review  " fg=Indexed(245)
+29 123 "t" fg=Cyan
+29 124 " Draft のみ  " fg=Indexed(245)
+29 137 "r" fg=Cyan
+29 138 " 更新  " fg=Indexed(245)
+29 145 "q" fg=Cyan
+29 146 " 終了  " fg=Indexed(245)

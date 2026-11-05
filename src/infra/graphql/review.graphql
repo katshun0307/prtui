@@ -1,0 +1,9 @@
+query($requested:String!, $reviewed:String!, $owner:String!) {
+  viewer { login }
+  owner: repositoryOwner(login:$owner) { ... on Organization {
+    member: teams(first:100, role:MEMBER) { nodes { slug } }
+    admin: teams(first:100, role:ADMIN) { nodes { slug } }
+  } }
+  requested: search(query:$requested, type:ISSUE, first:100) { nodes { ...pr ...requested } }
+  reviewed: search(query:$reviewed, type:ISSUE, first:100) { nodes { ...pr } }
+}

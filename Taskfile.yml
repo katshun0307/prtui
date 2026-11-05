@@ -22,3 +22,8 @@ tasks:
     deps: [build]
     cmds:
       - cargo install --path .
+
+  schema:
+    desc: GitHub の公開 GraphQL schema を取り直す. クエリの検証は cargo test で行う
+    cmds:
+      - curl -sSfL https://docs.github.com/public/fpt/schema.docs.graphql -o src/infra/graphql/schema.graphql

@@ -1,0 +1,91 @@
+---
+source: src/ui/mod.rs
+expression: styles(&term)
+---
+ 0   0 " o/r " BOLD
+ 0   5 "/src/r  " fg=Indexed(245)
+ 0  13 "branch: feat-a  " fg=Cyan
+ 0  29 "  未コミットの変更あり" fg=Yellow
+ 1   1 " 1 自分 (4)  2 レビュー (6) " fg=Indexed(245)
+ 1  29 " 3 マージ予定 (3) " BOLD | REVERSED
+ 2   0 " PR 3 件 " fg=Indexed(245)
+ 2   9 "取得失敗: HTTP 502 " fg=Red
+ 2  28 "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────" fg=Indexed(245)
+ 3   0 "  #      状態     CI      未解決 main  差分         Reviewer      Author       Assignee     Local      Devin       更新 タイトル                                " fg=Indexed(250) UNDERLINED
+ 4   9 "Ready   " fg=Green
+ 4  18 "-      " fg=Indexed(245)
+ 4  26 "0     " fg=Indexed(245)
+ 4  33 "0    " fg=Indexed(245)
+ 4  39 "+210" fg=Green
+ 4  44 "-21" fg=Red
+ 4  52 "✓1 " fg=Green
+ 4  79 "-           " fg=Indexed(245)
+ 4  92 "● 差分あり" fg=Magenta
+ 4 115 "2d  " fg=Indexed(245)
+ 5   9 "Ready   " fg=Green
+ 5  18 "-      " fg=Indexed(245)
+ 5  26 "0     " fg=Indexed(245)
+ 5  39 "+220" fg=Green
+ 5  44 "-22" fg=Red
+ 5  52 "未設定 " fg=Yellow
+ 5 115 "2d  " fg=Indexed(245)
+ 6   0 "▶ " fg=Cyan bg=Indexed(237) BOLD
+ 6   2 "#23    " bg=Indexed(237)
+ 6   9 "Ready   " fg=Green bg=Indexed(237)
+ 6  17 " " bg=Indexed(237)
+ 6  18 "-      " fg=Indexed(245) bg=Indexed(237)
+ 6  25 " " bg=Indexed(237)
+ 6  26 "0     " fg=Indexed(245) bg=Indexed(237)
+ 6  32 " " bg=Indexed(237)
+ 6  33 "0    " fg=Indexed(245) bg=Indexed(237)
+ 6  38 " " bg=Indexed(237)
+ 6  39 "+230" fg=Green bg=Indexed(237)
+ 6  43 " " bg=Indexed(237)
+ 6  44 "-23" fg=Red bg=Indexed(237)
+ 6  47 "     " bg=Indexed(237)
+ 6  52 "未設定 " fg=Yellow bg=Indexed(237)
+ 6  59 "       carol        carol" bg=Indexed(237)
+ 6  84 " +2" fg=Indexed(245) bg=Indexed(237)
+ 6  87 "                            " bg=Indexed(237)
+ 6 115 "2d  " fg=Indexed(245) bg=Indexed(237)
+ 6 119 " 3 人に割り当てた PR                     " bg=Indexed(237)
+19   0 " 詳細 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────" fg=Indexed(245)
+20   0 "#23 " BOLD
+21   0 "branch: " fg=Indexed(245)
+21   8 "feat-r" fg=Cyan
+21  14 " ← " fg=Indexed(245)
+21  17 "main" fg=Cyan
+21  21 "  author: " fg=Indexed(245)
+21  36 "  assignees: " fg=Indexed(245)
+22   0 "+230" fg=Green
+22   5 "-23" fg=Red
+22  17 "  threads: " fg=Indexed(245)
+22  40 "  labels: " fg=Indexed(245)
+23   0 "reviewers: 未設定" fg=Indexed(245)
+24   0 "https://github.com/o/r/pull/23" fg=Indexed(245) UNDERLINED
+29   1 "j/k" fg=Cyan
+29   4 " 移動  " fg=Indexed(245)
+29  11 "Tab/1-3" fg=Cyan
+29  18 " タブ  " fg=Indexed(245)
+29  25 "Enter" fg=Cyan
+29  30 " checkout  " fg=Indexed(245)
+29  41 "c" fg=Cyan
+29  42 " コピー  " fg=Indexed(245)
+29  51 "d" fg=Cyan
+29  52 " diff  " fg=Indexed(245)
+29  59 "o" fg=Cyan
+29  60 " ブラウザ  " fg=Indexed(245)
+29  71 "l" fg=Cyan
+29  72 " Linear  " fg=Indexed(245)
+29  81 "L" fg=Cyan
+29  82 " Linear review  " fg=Indexed(245)
+29  98 "v" fg=Cyan
+29  99 " Devin  " fg=Indexed(245)
+29 107 "V" fg=Cyan
+29 108 " Devin Review  " fg=Indexed(245)
+29 123 "t" fg=Cyan
+29 124 " Draft のみ  " fg=Indexed(245)
+29 137 "r" fg=Cyan
+29 138 " 更新  " fg=Indexed(245)
+29 145 "q" fg=Cyan
+29 146 " 終了  " fg=Indexed(245)

@@ -1,4 +1,6 @@
+mod adapters;
 mod event;
+mod ports;
 mod runtime;
 mod state;
 mod update;

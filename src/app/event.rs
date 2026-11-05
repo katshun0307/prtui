@@ -125,3 +125,57 @@ impl WatchUntil {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::pr::{Reviewer, ReviewerState};
+
+    fn pr() -> Pr {
+        let mut p = Pr::fixture(1, "b1", "main");
+        p.head_ref_oid = "oid1".into();
+        p
+    }
+
+    #[test]
+    fn watch_until_is_done() {
+        let open = pr();
+        let mut draft = pr();
+        draft.is_draft = true;
+        let mut requested = pr();
+        requested.reviewers = vec![Reviewer {
+            name: "Alice".into(),
+            state: ReviewerState::Requested,
+        }];
+
+        // None (open でなくなった) はすべて止める
+        for until in [
+            WatchUntil::Immediately,
+            WatchUntil::HeadMovedFrom(Some("oid1".into())),
+            WatchUntil::NotDraft,
+            WatchUntil::IsDraft,
+            WatchUntil::Gone,
+            WatchUntil::Requested(vec!["alice".into()]),
+        ] {
+            assert!(until.is_done(None), "{until:?}");
+        }
+
+        assert!(WatchUntil::Immediately.is_done(Some(&open)));
+
+        assert!(!WatchUntil::HeadMovedFrom(Some("oid1".into())).is_done(Some(&open)));
+        assert!(WatchUntil::HeadMovedFrom(Some("old".into())).is_done(Some(&open)));
+        assert!(WatchUntil::HeadMovedFrom(None).is_done(Some(&open)));
+
+        assert!(WatchUntil::NotDraft.is_done(Some(&open)));
+        assert!(!WatchUntil::NotDraft.is_done(Some(&draft)));
+
+        assert!(WatchUntil::IsDraft.is_done(Some(&draft)));
+        assert!(!WatchUntil::IsDraft.is_done(Some(&open)));
+
+        assert!(!WatchUntil::Gone.is_done(Some(&open)));
+
+        let alice = WatchUntil::Requested(vec!["alice".into()]);
+        assert!(alice.is_done(Some(&requested)));
+        assert!(!alice.is_done(Some(&open)));
+    }
+}

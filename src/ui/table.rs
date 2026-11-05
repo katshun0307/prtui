@@ -12,15 +12,20 @@ use crate::domain::local::LocalState;
 use crate::domain::pr::{CheckState, MyReview, Pr, ReviewerState};
 
 pub(super) fn draw_table(f: &mut Frame, state: &mut AppState, area: ratatui::layout::Rect) {
-    let (header, widths, rows) = match state.tab {
-        Tab::Mine => mine_rows(state),
-        Tab::Review => review_rows(state),
-        Tab::Custom(_) => custom_rows(state),
+    let columns = match state.tab {
+        Tab::Mine => MINE,
+        Tab::Review => REVIEW,
+        Tab::Custom(_) => CUSTOM,
     };
+    let rows: Vec<Row> = state
+        .visible()
+        .into_iter()
+        .map(|p| Row::new(columns.iter().map(|c| (c.cell)(state, p))))
+        .collect();
     let title = table_title(state, rows.len());
-    let table = Table::new(rows, widths)
+    let table = Table::new(rows, columns.iter().map(|c| c.width))
         .header(
-            Row::new(header).style(
+            Row::new(columns.iter().map(|c| c.header)).style(
                 Style::new()
                     .fg(HEADER_FG)
                     .add_modifier(Modifier::UNDERLINED),
@@ -37,176 +42,96 @@ pub(super) fn draw_table(f: &mut Frame, state: &mut AppState, area: ratatui::lay
     f.render_stateful_widget(table, area, &mut state.list_mut().table);
 }
 
-type Columns<'a> = (Vec<&'static str>, Vec<Constraint>, Vec<Row<'a>>);
-
-fn mine_rows(state: &AppState) -> Columns<'static> {
-    let rows = state
-        .visible()
-        .into_iter()
-        .map(|p| {
-            Row::new(vec![
-                Cell::from(format!("#{}", p.number)),
-                stack_cell(p),
-                state_cell(p),
-                ci_cell(p),
-                threads_cell(p),
-                behind_cell(p),
-                size_cell(p),
-                review_cell(p),
-                reviewer_cell(p),
-                local_cell(&state.local, p),
-                Cell::from(devin_span(state.devin_for(p))),
-                Cell::from(ago(p.updated_at)).fg(DIM),
-                title_cell(p),
-            ])
-        })
-        .collect();
-    let header = vec![
-        "#",
-        "Stack",
-        "状態",
-        "CI",
-        "未解決",
-        "main",
-        "差分",
-        "Review",
-        "Reviewer",
-        "Local",
-        "Devin",
-        "更新",
-        "タイトル",
-    ];
-    let widths = vec![
-        Constraint::Length(6),
-        Constraint::Length(5),
-        Constraint::Length(8),
-        Constraint::Length(7),
-        Constraint::Length(6),
-        Constraint::Length(5),
-        Constraint::Length(12),
-        Constraint::Length(9),
-        Constraint::Length(13),
-        Constraint::Length(10),
-        Constraint::Length(11),
-        Constraint::Length(4),
-        Constraint::Fill(1),
-    ];
-    (header, widths, rows)
+/// 一覧の 1 列. 見出しと幅とセルを 1 か所に書き, タブごとの列の表に並べる
+struct Column {
+    header: &'static str,
+    width: Constraint,
+    cell: fn(&AppState, &Pr) -> Cell<'static>,
 }
+
+/// 幅が固定の列
+const fn col(
+    header: &'static str,
+    width: u16,
+    cell: fn(&AppState, &Pr) -> Cell<'static>,
+) -> Column {
+    Column {
+        header,
+        width: Constraint::Length(width),
+        cell,
+    }
+}
+
+const NUMBER: Column = col("#", 6, |_, p| Cell::from(format!("#{}", p.number)));
+const STATE: Column = col("状態", 8, |_, p| state_cell(p));
+const CI: Column = col("CI", 7, |_, p| ci_cell(p));
+const THREADS: Column = col("未解決", 6, |_, p| threads_cell(p));
+const BEHIND: Column = col("main", 5, |_, p| behind_cell(p));
+const SIZE: Column = col("差分", 12, |_, p| size_cell(p));
+const REVIEWER: Column = col("Reviewer", 13, |_, p| reviewer_cell(p));
+const LOCAL: Column = col("Local", 10, |s, p| local_cell(&s.local, p));
+const DEVIN: Column = col("Devin", 11, |s, p| Cell::from(devin_span(s.devin_for(p))));
+const UPDATED: Column = col("更新", 4, |_, p| Cell::from(ago(p.updated_at)).fg(DIM));
+/// 残りの幅を使う. 自分タブ以外は stack をまとめないので字下げしない
+const TITLE: Column = Column {
+    header: "タイトル",
+    width: Constraint::Fill(1),
+    cell: |_, p| Cell::from(p.title.clone()),
+};
+
+/// 自分タブ. stack を親の直後に並べるので Stack を出し, タイトルを段に応じて字下げする
+const MINE: &[Column] = &[
+    NUMBER,
+    col("Stack", 5, |_, p| stack_cell(p)),
+    STATE,
+    CI,
+    THREADS,
+    BEHIND,
+    SIZE,
+    REVIEWER,
+    LOCAL,
+    DEVIN,
+    UPDATED,
+    Column {
+        cell: |_, p| title_cell(p),
+        ..TITLE
+    },
+];
 
 /// レビュータブ. 他人の PR なので main 取り込みの要否と stack は出さず, author と自分の立場を出す
-fn review_rows(state: &AppState) -> Columns<'static> {
-    let rows = state
-        .visible()
-        .into_iter()
-        .map(|p| {
-            Row::new(vec![
-                Cell::from(format!("#{}", p.number)),
-                state_cell(p),
-                ci_cell(p),
-                threads_cell(p),
-                size_cell(p),
-                Cell::from(p.author.clone()),
-                my_review_cell(p),
-                requested_at_cell(p),
-                reviewer_cell(p),
-                local_cell(&state.local, p),
-                Cell::from(devin_span(state.devin_for(p))),
-                Cell::from(ago(p.updated_at)).fg(DIM),
-                Cell::from(p.title.clone()),
-            ])
-        })
-        .collect();
-    let header = vec![
-        "#",
-        "状態",
-        "CI",
-        "未解決",
-        "差分",
-        "Author",
-        "自分",
-        "依頼",
-        "Reviewer",
-        "Local",
-        "Devin",
-        "更新",
-        "タイトル",
-    ];
-    let widths = vec![
-        Constraint::Length(6),
-        Constraint::Length(8),
-        Constraint::Length(7),
-        Constraint::Length(6),
-        Constraint::Length(12),
-        Constraint::Length(14),
-        Constraint::Length(10),
-        Constraint::Length(4),
-        Constraint::Length(13),
-        Constraint::Length(10),
-        Constraint::Length(11),
-        Constraint::Length(4),
-        Constraint::Fill(1),
-    ];
-    (header, widths, rows)
-}
+const REVIEW: &[Column] = &[
+    NUMBER,
+    STATE,
+    CI,
+    THREADS,
+    SIZE,
+    col("Author", 14, |_, p| Cell::from(p.author.clone())),
+    col("自分", 10, |_, p| my_review_cell(p)),
+    col("依頼", 4, |_, p| requested_at_cell(p)),
+    REVIEWER,
+    LOCAL,
+    DEVIN,
+    UPDATED,
+    TITLE,
+];
 
 /// 追加のタブ. 自分と他人の PR が混ざるので Author と Assignee を出す. マージの判断に使うことが多いので
-/// main を出す. stack はまとめないので Stack は出さない. Review (`reviewDecision`) は必須レビューのルールが
-/// 無い repo では常に `-` なので出さず, 承認の状況は Reviewer で見る
-fn custom_rows(state: &AppState) -> Columns<'static> {
-    let rows = state
-        .visible()
-        .into_iter()
-        .map(|p| {
-            Row::new(vec![
-                Cell::from(format!("#{}", p.number)),
-                state_cell(p),
-                ci_cell(p),
-                threads_cell(p),
-                behind_cell(p),
-                size_cell(p),
-                reviewer_cell(p),
-                Cell::from(p.author.clone()),
-                assignee_cell(p),
-                local_cell(&state.local, p),
-                Cell::from(devin_span(state.devin_for(p))),
-                Cell::from(ago(p.updated_at)).fg(DIM),
-                Cell::from(p.title.clone()),
-            ])
-        })
-        .collect();
-    let header = vec![
-        "#",
-        "状態",
-        "CI",
-        "未解決",
-        "main",
-        "差分",
-        "Reviewer",
-        "Author",
-        "Assignee",
-        "Local",
-        "Devin",
-        "更新",
-        "タイトル",
-    ];
-    let widths = vec![
-        Constraint::Length(6),
-        Constraint::Length(8),
-        Constraint::Length(7),
-        Constraint::Length(6),
-        Constraint::Length(5),
-        Constraint::Length(12),
-        Constraint::Length(13),
-        Constraint::Length(12),
-        Constraint::Length(12),
-        Constraint::Length(10),
-        Constraint::Length(11),
-        Constraint::Length(4),
-        Constraint::Fill(1),
-    ];
-    (header, widths, rows)
-}
+/// main を出す. stack はまとめないので Stack は出さない
+const CUSTOM: &[Column] = &[
+    NUMBER,
+    STATE,
+    CI,
+    THREADS,
+    BEHIND,
+    SIZE,
+    REVIEWER,
+    col("Author", 12, |_, p| Cell::from(p.author.clone())),
+    col("Assignee", 12, |_, p| assignee_cell(p)),
+    LOCAL,
+    DEVIN,
+    UPDATED,
+    TITLE,
+];
 
 /// 先頭の assignee と残りの人数 `alice +1`. 全員は詳細欄に出す. 居なければ DIM の `-`
 fn assignee_cell(p: &Pr) -> Cell<'static> {
@@ -333,15 +258,6 @@ fn size_cell(p: &Pr) -> Cell<'static> {
         Span::raw(" "),
         Span::raw(format!("-{}", p.deletions)).red(),
     ]))
-}
-
-fn review_cell(p: &Pr) -> Cell<'static> {
-    match p.review_decision.as_deref() {
-        Some("APPROVED") => Cell::from("APPROVED").green(),
-        Some("CHANGES_REQUESTED") => Cell::from("CHANGES").red(),
-        Some("REVIEW_REQUIRED") => Cell::from("REQUIRED").yellow(),
-        _ => Cell::from("-").fg(DIM),
-    }
 }
 
 /// 承認 ✓n, 変更要求 ✗n, 依頼中 ●n, コメントのみ ✎n を数で出す. Bot は reviewers に入らないので数えない.
