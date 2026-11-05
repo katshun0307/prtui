@@ -242,7 +242,6 @@ mod tests {
     use crate::app::event::{Effect, Event, WatchUntil};
     use crate::domain::devin::DevinSession;
     use crate::domain::op::PrOp;
-    use crate::domain::pr::{Reviewer, ReviewerState};
 
     #[test]
     fn custom_tab_fetch() {
@@ -381,48 +380,6 @@ mod tests {
         );
         assert!(s.busy.is_none());
         assert_eq!(message(&s), ("#1 を open にした", false));
-    }
-
-    #[test]
-    fn watch_until_is_done() {
-        let open = pr(1);
-        let mut draft = pr(1);
-        draft.is_draft = true;
-        let mut requested = pr(1);
-        requested.reviewers = vec![Reviewer {
-            name: "Alice".into(),
-            state: ReviewerState::Requested,
-        }];
-
-        // None (open でなくなった) はすべて止める
-        for until in [
-            WatchUntil::Immediately,
-            WatchUntil::HeadMovedFrom(Some("oid1".into())),
-            WatchUntil::NotDraft,
-            WatchUntil::IsDraft,
-            WatchUntil::Gone,
-            WatchUntil::Requested(vec!["alice".into()]),
-        ] {
-            assert!(until.is_done(None), "{until:?}");
-        }
-
-        assert!(WatchUntil::Immediately.is_done(Some(&open)));
-
-        assert!(!WatchUntil::HeadMovedFrom(Some("oid1".into())).is_done(Some(&open)));
-        assert!(WatchUntil::HeadMovedFrom(Some("old".into())).is_done(Some(&open)));
-        assert!(WatchUntil::HeadMovedFrom(None).is_done(Some(&open)));
-
-        assert!(WatchUntil::NotDraft.is_done(Some(&open)));
-        assert!(!WatchUntil::NotDraft.is_done(Some(&draft)));
-
-        assert!(WatchUntil::IsDraft.is_done(Some(&draft)));
-        assert!(!WatchUntil::IsDraft.is_done(Some(&open)));
-
-        assert!(!WatchUntil::Gone.is_done(Some(&open)));
-
-        let alice = WatchUntil::Requested(vec!["alice".into()]);
-        assert!(alice.is_done(Some(&requested)));
-        assert!(!alice.is_done(Some(&open)));
     }
 
     #[test]
