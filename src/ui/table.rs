@@ -151,7 +151,8 @@ fn review_rows(state: &AppState) -> Columns<'static> {
 }
 
 /// 追加のタブ. 自分と他人の PR が混ざるので Author と Assignee を出す. マージの判断に使うことが多いので
-/// main と Review を出す. stack はまとめないので Stack は出さない
+/// main を出す. stack はまとめないので Stack は出さない. Review (`reviewDecision`) は必須レビューのルールが
+/// 無い repo では常に `-` なので出さず, 承認の状況は Reviewer で見る
 fn custom_rows(state: &AppState) -> Columns<'static> {
     let rows = state
         .visible()
@@ -164,7 +165,6 @@ fn custom_rows(state: &AppState) -> Columns<'static> {
                 threads_cell(p),
                 behind_cell(p),
                 size_cell(p),
-                review_cell(p),
                 reviewer_cell(p),
                 Cell::from(p.author.clone()),
                 assignee_cell(p),
@@ -182,7 +182,6 @@ fn custom_rows(state: &AppState) -> Columns<'static> {
         "未解決",
         "main",
         "差分",
-        "Review",
         "Reviewer",
         "Author",
         "Assignee",
@@ -198,7 +197,6 @@ fn custom_rows(state: &AppState) -> Columns<'static> {
         Constraint::Length(6),
         Constraint::Length(5),
         Constraint::Length(12),
-        Constraint::Length(9),
         Constraint::Length(13),
         Constraint::Length(12),
         Constraint::Length(12),
