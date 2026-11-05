@@ -25,11 +25,15 @@ fn render_chat(f: &mut Frame, area: Rect, header: Line<'static>, state: &mut App
     let Some(chat) = state.chat.as_mut() else {
         return;
     };
-    let input = input_line(chat.typing, &chat.draft);
+    // 入力欄は折り返して高さを行数に合わせる. 画面の半分を超える分は先頭を隠して末尾 (カーソル側) を見せる
+    let input =
+        input_line(chat.typing, &chat.draft).map(|l| Paragraph::new(l).wrap(Wrap { trim: false }));
+    let input_lines = input.as_ref().map_or(0, |p| p.line_count(area.width));
+    let input_height = input_lines.min(usize::from(area.height / 2).max(1)) as u16;
     let [header_area, body, input_area, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
-        Constraint::Length(u16::from(input.is_some())),
+        Constraint::Length(input_height),
         Constraint::Length(1),
     ])
     .areas(area);
@@ -45,7 +49,11 @@ fn render_chat(f: &mut Frame, area: Rect, header: Line<'static>, state: &mut App
     f.render_widget(para.scroll((offset.min(u16::MAX as usize) as u16, 0)), body);
 
     if let Some(input) = input {
-        f.render_widget(input, input_area);
+        let hidden = input_lines.saturating_sub(input_area.height as usize);
+        f.render_widget(
+            input.scroll((hidden.min(u16::MAX as usize) as u16, 0)),
+            input_area,
+        );
     }
     f.render_widget(
         footer_line(chat.sending, chat.error.as_deref(), chat.typing),
@@ -116,13 +124,14 @@ fn speaker_span(m: &DevinMessage) -> Span<'static> {
     }
 }
 
-/// 入力中か書きかけがあるときだけ出す. 改行は `⏎` にして 1 行に収める
+/// 入力中か書きかけがあるときだけ出す. 改行は `⏎` にして 1 つの Line にし, 描画側で折り返す
 fn input_line(typing: bool, draft: &str) -> Option<Line<'static>> {
     if !typing && draft.is_empty() {
         return None;
     }
+    // 空白の無い長い入力が `> ` の直後で折り返されないように NBSP で繋ぐ
     let mut spans = vec![
-        Span::raw("> ").cyan().bold(),
+        Span::raw(">\u{a0}").cyan().bold(),
         Span::raw(draft.replace('\n', "⏎")),
     ];
     if typing {
@@ -267,9 +276,9 @@ mod tests {
     #[test]
     fn input_only_when_typing_or_draft() {
         assert!(input_line(false, "").is_none());
-        assert_eq!(input_line(false, "a\nb").unwrap().to_string(), "> a⏎b");
-        assert_eq!(input_line(true, "a\nb").unwrap().to_string(), "> a⏎b█");
-        assert_eq!(input_line(true, "").unwrap().to_string(), "> █");
+        assert_eq!(input_line(false, "a\nb").unwrap().to_string(), ">\u{a0}a⏎b");
+        assert_eq!(input_line(true, "a\nb").unwrap().to_string(), ">\u{a0}a⏎b█");
+        assert_eq!(input_line(true, "").unwrap().to_string(), ">\u{a0}█");
     }
 
     #[test]
@@ -354,7 +363,35 @@ mod tests {
         let chat = s.chat.as_ref().unwrap();
         assert_eq!(chat.viewport_height, 3);
         assert_eq!(chat.max_scroll, 1);
-        assert_eq!(rows[4], "> hi█");
+        assert_eq!(rows[4], ">\u{a0}hi█");
         assert!(rows[5].contains("Enter"), "{rows:?}");
+    }
+
+    #[test]
+    fn render_wraps_long_input() {
+        let mut s = state(five_messages());
+        let chat = s.chat.as_mut().unwrap();
+        chat.typing = true;
+        chat.draft = "a".repeat(25);
+        // "> " + 25 文字 + "█" = 28 文字は幅 20 で 2 行. 欄は 8 - 2 - 2 = 4 行
+        let rows = render(&mut s, 20, 8);
+        assert_eq!(s.chat.as_ref().unwrap().viewport_height, 4);
+        assert_eq!(rows[5], format!(">\u{a0}{}", "a".repeat(18)));
+        assert_eq!(rows[6], format!("{}█", "a".repeat(7)));
+        assert!(rows[7].contains("Enter"), "{rows:?}");
+    }
+
+    #[test]
+    fn render_long_input_is_capped_and_shows_tail() {
+        let mut s = state(five_messages());
+        let chat = s.chat.as_mut().unwrap();
+        chat.typing = true;
+        chat.draft = format!("{}z", "a".repeat(99));
+        // 103 文字は幅 20 で 6 行. 高さ 8 の半分の 4 行に抑え, 末尾を出す
+        let rows = render(&mut s, 20, 8);
+        assert_eq!(s.chat.as_ref().unwrap().viewport_height, 2);
+        assert_eq!(rows[3], "a".repeat(20));
+        assert_eq!(rows[6], "az█");
+        assert!(rows[7].contains("Enter"), "{rows:?}");
     }
 }
