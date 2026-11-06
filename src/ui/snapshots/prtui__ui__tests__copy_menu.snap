@@ -24,7 +24,7 @@ expression: screen(&terminal(&mut s))
  詳細 ────────────────────────└──────────────────────────────────────────────────────────────────────────────────────────────────┘──────────────────────────────
 #1 ABC-1 土台を足す
 branch: feat-a ← main  author: katshun  assignees:
-+10 -1  3 files  threads: 未解決 0 / 0  labels: feature
++10 -1  3 files  threads: 未解決 0 / 0  labels: ● feature  ● good first issue
 reviewers: alice ✓, bob (コメント)
 devin: running https://app.devin.ai/sessions/devin-1
 https://github.com/o/r/pull/1

@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use crate::domain::label::Label;
 use crate::domain::linear::{REVIEW_LINK_MARK, extract_review_url};
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
@@ -77,6 +78,24 @@ pub fn checkout(dir: &Path, number: u64, force: bool) -> Result<String> {
 /// PR の状態を変える. Review のときは targets を `--add-reviewer` に渡す
 pub fn change_state(dir: &Path, number: u64, op: PrOp, targets: &[String]) -> Result<String> {
     gh(dir, &change_state_args(number, op, targets))
+}
+
+/// repo のラベルを全件返す. 並びは選択画面で決めるので gh の既定のまま
+pub fn fetch_labels(dir: &Path, repo: &str) -> Result<Vec<Label>> {
+    let out = gh(dir, &fetch_labels_args(repo))?;
+    parse_labels(&out)
+}
+
+/// PR のラベルを付け外す. add も remove も空なら gh を呼ばない
+pub fn edit_labels(dir: &Path, number: u64, add: &[String], remove: &[String]) -> Result<String> {
+    if add.is_empty() && remove.is_empty() {
+        return Ok(String::new());
+    }
+    gh(dir, &edit_labels_args(number, add, remove))
+}
+
+fn parse_labels(json: &str) -> Result<Vec<Label>> {
+    serde_json::from_str(json).context("ラベル一覧の JSON を読めない")
 }
 
 pub fn view_web(dir: &Path, number: u64) -> Result<String> {
@@ -181,6 +200,32 @@ fn linear_review_url_args(repo: &str, number: u64) -> Vec<String> {
         "--jq".into(),
         format!(r#".[] | select(.body | contains("{REVIEW_LINK_MARK}")) | .body"#),
     ]
+}
+
+/// gh の既定は 30 件なので上限を上げる
+fn fetch_labels_args(repo: &str) -> Vec<String> {
+    strings([
+        "label",
+        "list",
+        "--repo",
+        repo,
+        "--limit",
+        "1000",
+        "--json",
+        "name,color,description",
+    ])
+}
+
+/// gh は `--add-label` の値をカンマで分けるので, 1 つずつフラグにしてもカンマを含む名前は扱えない
+fn edit_labels_args(number: u64, add: &[String], remove: &[String]) -> Vec<String> {
+    let mut args = strings(["pr", "edit", &number.to_string()]);
+    for l in add {
+        args.extend(["--add-label".into(), l.clone()]);
+    }
+    for l in remove {
+        args.extend(["--remove-label".into(), l.clone()]);
+    }
+    args
 }
 
 fn checkout_args(number: u64, force: bool) -> Vec<String> {
@@ -298,6 +343,69 @@ mod tests {
             ["api", "--paginate", "repos/o/r/issues/7/comments", "--jq"]
         );
         assert!(args[4].contains(REVIEW_LINK_MARK));
+    }
+
+    #[test]
+    fn labels_list_all() {
+        assert_eq!(
+            fetch_labels_args("o/r"),
+            [
+                "label",
+                "list",
+                "--repo",
+                "o/r",
+                "--limit",
+                "1000",
+                "--json",
+                "name,color,description"
+            ]
+        );
+    }
+
+    #[test]
+    fn labels_parse() {
+        let json = r#"[{"name":"bug","color":"d73a4a","description":"壊れている"},
+            {"name":"good first issue","color":"7057ff","description":""}]"#;
+        assert_eq!(
+            parse_labels(json).unwrap(),
+            [
+                Label {
+                    name: "bug".into(),
+                    color: "d73a4a".into(),
+                    description: "壊れている".into(),
+                },
+                Label {
+                    name: "good first issue".into(),
+                    color: "7057ff".into(),
+                    description: String::new(),
+                },
+            ]
+        );
+        assert!(parse_labels("oops").is_err());
+    }
+
+    #[test]
+    fn edit_labels_flag_per_label() {
+        let add = ["good first issue".to_string(), "docs".to_string()];
+        let remove = ["bug".to_string()];
+        assert_eq!(
+            edit_labels_args(7, &add, &remove),
+            [
+                "pr",
+                "edit",
+                "7",
+                "--add-label",
+                "good first issue",
+                "--add-label",
+                "docs",
+                "--remove-label",
+                "bug"
+            ]
+        );
+        assert_eq!(
+            edit_labels_args(7, &[], &remove),
+            ["pr", "edit", "7", "--remove-label", "bug"]
+        );
     }
 
     #[test]

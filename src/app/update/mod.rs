@@ -15,6 +15,7 @@ use crate::domain::review::review_targets;
 
 mod chat;
 mod event;
+mod label;
 
 pub use event::handle_event;
 
@@ -105,8 +106,11 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
     if let Some(items) = state.copy_menu.take() {
         return copy(state, items, key);
     }
+    if state.label_menu.is_some() {
+        return label::label_key(state, key);
+    }
     if state.tab.is_readonly()
-        && let KeyCode::Char(c @ ('u' | 'O' | 'D' | 'X' | 'R')) = key.code
+        && let KeyCode::Char(c @ ('u' | 'O' | 'D' | 'X' | 'R' | 'a')) = key.code
     {
         state.error(format!(
             "{c} は{}タブでは使えない",
@@ -129,6 +133,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('D') => request_state(state, PrOp::Draft),
         KeyCode::Char('X') => request_state(state, PrOp::Close),
         KeyCode::Char('R') => request_state(state, PrOp::Review),
+        KeyCode::Char('a') => label::open_labels(state),
         KeyCode::Char('j') | KeyCode::Down => {
             state.list_mut().move_by(1);
             vec![]
@@ -632,7 +637,7 @@ mod tests {
         let mut s = review_state(vec![], vec![pr(10)]);
         s.local.reviewers = vec!["alice".into()];
         handle_key(&mut s, key('2'));
-        for c in ['u', 'O', 'D', 'X', 'R'] {
+        for c in ['u', 'O', 'D', 'X', 'R', 'a'] {
             assert!(handle_key(&mut s, key(c)).is_empty(), "{c}");
             assert_eq!(
                 message(&s),

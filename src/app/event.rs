@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 use crate::domain::devin::{DevinMessage, DevinSession};
+use crate::domain::label::{Label, same_labels};
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
 use crate::domain::review::review_targets;
@@ -29,6 +30,15 @@ pub enum Event {
     DevinSent(String, Result<DevinSession>),
     /// エディタで書いた内容. エディタが非 0 で終わったら None
     Composed(Result<Option<String>>),
+    /// repo のラベル一覧
+    FetchedLabels(Result<Vec<Label>>),
+    /// PR のラベルを付け外した結果. add と remove は依頼した差分
+    EditedLabels {
+        number: u64,
+        add: Vec<String>,
+        remove: Vec<String>,
+        res: Result<String>,
+    },
 }
 
 /// main への指示
@@ -92,6 +102,14 @@ pub enum Effect {
     Compose {
         draft: String,
     },
+    /// repo のラベル一覧をスレッドで取る
+    FetchLabels,
+    /// PR のラベルを付け外す
+    EditLabels {
+        number: u64,
+        add: Vec<String>,
+        remove: Vec<String>,
+    },
 }
 
 /// watch を止める条件. 取り直した PR (open でなくなっていれば None) で判定する
@@ -107,6 +125,8 @@ pub enum WatchUntil {
     Gone,
     /// 指定の相手が全員依頼中になった
     Requested(Vec<String>),
+    /// ラベルが指定の集合になった (順番と大文字小文字は見ない)
+    Labels(Vec<String>),
 }
 
 impl WatchUntil {
@@ -122,6 +142,7 @@ impl WatchUntil {
             WatchUntil::Requested(reviewers) => {
                 pr.is_none_or(|p| review_targets(p, reviewers).is_empty())
             }
+            WatchUntil::Labels(labels) => pr.is_none_or(|p| same_labels(&p.label_names(), labels)),
         }
     }
 }
@@ -156,6 +177,7 @@ mod tests {
             WatchUntil::IsDraft,
             WatchUntil::Gone,
             WatchUntil::Requested(vec!["alice".into()]),
+            WatchUntil::Labels(vec!["bug".into()]),
         ] {
             assert!(until.is_done(None), "{until:?}");
         }
@@ -177,5 +199,17 @@ mod tests {
         let alice = WatchUntil::Requested(vec!["alice".into()]);
         assert!(alice.is_done(Some(&requested)));
         assert!(!alice.is_done(Some(&open)));
+
+        let mut labeled = pr();
+        labeled.labels = ["Bug", "docs"]
+            .map(|name| crate::domain::label::Label {
+                name: name.into(),
+                ..Default::default()
+            })
+            .to_vec();
+        let labels = WatchUntil::Labels(vec!["docs".into(), "bug".into()]);
+        assert!(labels.is_done(Some(&labeled)));
+        assert!(!labels.is_done(Some(&open)));
+        assert!(WatchUntil::Labels(vec![]).is_done(Some(&open)));
     }
 }

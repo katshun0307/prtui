@@ -147,6 +147,20 @@ impl App {
                     self.spawn(move |p| Event::LinearReview(n, p.gh.linear_review_url(n)))
                 }
                 Effect::Watch { number, until } => self.watch(number, until),
+                Effect::FetchLabels => self.spawn(|p| Event::FetchedLabels(p.gh.fetch_labels())),
+                Effect::EditLabels {
+                    number,
+                    add,
+                    remove,
+                } => self.spawn(move |p| {
+                    let res = p.gh.edit_labels(number, &add, &remove);
+                    Event::EditedLabels {
+                        number,
+                        add,
+                        remove,
+                        res,
+                    }
+                }),
                 Effect::OpenUrl(url) => {
                     if let Err(e) = self.ports.desktop.open_url(&url) {
                         self.state.error(e.to_string());
@@ -343,6 +357,7 @@ mod tests {
     use crate::app::ports::fake::Fakes;
     use crate::app::state::AppState;
     use crate::domain::cache::{Cache, CustomCache};
+    use crate::domain::label::Label;
     use crate::domain::local::{LocalState, TabQuery};
     use crate::domain::pr::Pr;
 
@@ -474,6 +489,62 @@ mod tests {
         a.pump_blocking(1);
         assert_eq!(f.gh.calls(), vec!["fetch_pr 1"; 3]);
         assert_eq!(a.state.pr(1).map(|p| p.is_draft), Some(false));
+    }
+
+    /// ラベルを付け外したら, その結果になるまで 1 件を取り直す
+    #[test]
+    fn edit_labels_then_watch_until_applied() {
+        let f = Fakes::default();
+        let mut a = app(&f);
+        let mut before = pr(1);
+        before.labels = vec![Label {
+            name: "bug".into(),
+            ..Label::default()
+        }];
+        let mut after = pr(1);
+        after.labels = vec![Label {
+            name: "docs".into(),
+            ..Label::default()
+        }];
+        a.state.mine.prs = vec![before.clone()];
+        f.gh.pr
+            .lock()
+            .unwrap()
+            .extend([Ok(Some(before)), Ok(Some(after))]);
+        a.perform(vec![Effect::EditLabels {
+            number: 1,
+            add: vec!["docs".into()],
+            remove: vec!["bug".into()],
+        }]);
+        // EditedLabels と, それが出した Watch の Reloaded
+        a.pump_blocking(2);
+        assert_eq!(
+            f.gh.calls(),
+            ["edit_labels 1 +docs -bug", "fetch_pr 1", "fetch_pr 1"]
+        );
+        assert_eq!(
+            a.state.pr(1).map(|p| p.label_names()),
+            Some(vec!["docs".to_string()])
+        );
+        assert_eq!(
+            message(&a.state),
+            ("#1 のラベルを変えた: +docs -bug", false)
+        );
+    }
+
+    #[test]
+    fn fetch_labels_fills_repo_labels() {
+        let f = Fakes::default();
+        let mut a = app(&f);
+        *f.gh.labels.lock().unwrap() = Ok(vec![Label {
+            name: "bug".into(),
+            ..Label::default()
+        }]);
+        a.state.labels_loading = true;
+        a.perform(vec![Effect::FetchLabels]);
+        a.pump_blocking(1);
+        assert!(!a.state.labels_loading);
+        assert_eq!(a.state.repo_labels.len(), 1);
     }
 
     #[test]

@@ -60,7 +60,7 @@ expression: styles(&term)
 22   0 "+230" fg=Green
 22   5 "-23" fg=Red
 22  17 "  threads: " fg=Indexed(245)
-22  40 "  labels: " fg=Indexed(245)
+22  40 "  labels:" fg=Indexed(245)
 23   0 "reviewers: 未設定" fg=Indexed(245)
 24   0 "https://github.com/o/r/pull/23" fg=Indexed(245) UNDERLINED
 29   1 "j/k" fg=Cyan

@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod copy;
 pub mod devin;
+pub mod label;
 pub mod linear;
 pub mod local;
 pub mod op;
