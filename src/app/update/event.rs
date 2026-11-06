@@ -193,7 +193,7 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
             chat.sending = false;
             match res {
                 Ok(session) => {
-                    chat.draft.clear();
+                    chat.set_draft(String::new());
                     chat.typing = false;
                     // 送ったメッセージをすぐ出すため次の tick で取り直す
                     chat.last_poll = None;
@@ -264,7 +264,7 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
             };
             match res {
                 Ok(Some(text)) => {
-                    chat.draft = text.trim_end_matches(['\n', '\r']).to_string();
+                    chat.set_draft(text.trim_end_matches(['\n', '\r']).to_string());
                     send(chat)
                 }
                 // エディタを非 0 で終えたら取りやめ. draft は変えない
@@ -463,7 +463,7 @@ mod tests {
         let mut s = chat_state();
         {
             let c = s.chat.as_mut().unwrap();
-            c.draft = "hi".into();
+            c.set_draft("hi".into());
             c.typing = true;
             c.sending = true;
             c.last_poll = Some(Instant::now());
@@ -474,6 +474,7 @@ mod tests {
         assert_eq!(effects, vec![Effect::SaveCache]);
         let c = chat(&s);
         assert!(!c.sending && !c.typing && c.draft.is_empty() && c.last_poll.is_none());
+        assert_eq!(c.cursor, 0);
         assert_eq!(s.devin_sessions.len(), 1);
         assert_eq!(
             s.chat_session().map(|x| x.status),
@@ -515,6 +516,7 @@ mod tests {
 
         let effects = handle_event(&mut s, Event::Composed(Ok(Some("a\nb\n\n".into()))));
         assert_eq!(chat(&s).draft, "a\nb");
+        assert_eq!(chat(&s).cursor, 3);
         assert_eq!(
             effects,
             vec![Effect::SendMessage {

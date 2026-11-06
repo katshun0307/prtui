@@ -26,7 +26,7 @@ pub(super) fn open_chat(state: &mut AppState) -> Vec<Effect> {
 
 const NO_DEVIN_CONFIG: &str = "Devin の設定が無い. git config prtui.devin-token <token> と prtui.devin-org <org-id> を設定する";
 
-/// 会話ビューのキー. 1 行入力中は Enter と Esc と Backspace 以外を文字として draft に足す
+/// 会話ビューのキー. 1 行入力中は編集キー以外の文字を入力位置に挿す
 pub(super) fn chat_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
     let url = state.chat_session().map(|s| s.url.clone());
     let Some(chat) = state.chat.as_mut() else {
@@ -34,16 +34,7 @@ pub(super) fn chat_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
     };
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     if chat.typing {
-        match key.code {
-            KeyCode::Enter => return send(chat),
-            KeyCode::Esc => chat.typing = false,
-            KeyCode::Backspace => {
-                chat.draft.pop();
-            }
-            KeyCode::Char(c) if !ctrl => chat.draft.push(c),
-            _ => {}
-        }
-        return vec![];
+        return typing_key(chat, key.code, ctrl);
     }
     let half = (chat.viewport_height / 2).max(1) as isize;
     match key.code {
@@ -77,6 +68,43 @@ pub(super) fn chat_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         _ => {}
     }
     vec![]
+}
+
+/// 1 行入力中のキー. 矢印と Home/End (と Emacs 風の C-b/C-f/C-a/C-e) で入力位置を動かす
+fn typing_key(chat: &mut ChatView, code: KeyCode, ctrl: bool) -> Vec<Effect> {
+    let len = chat.draft.chars().count();
+    let cur = chat.cursor.min(len);
+    match code {
+        KeyCode::Enter => return send(chat),
+        KeyCode::Esc => chat.typing = false,
+        KeyCode::Left => chat.cursor = cur.saturating_sub(1),
+        KeyCode::Char('b') if ctrl => chat.cursor = cur.saturating_sub(1),
+        KeyCode::Right => chat.cursor = (cur + 1).min(len),
+        KeyCode::Char('f') if ctrl => chat.cursor = (cur + 1).min(len),
+        KeyCode::Home => chat.cursor = 0,
+        KeyCode::Char('a') if ctrl => chat.cursor = 0,
+        KeyCode::End => chat.cursor = len,
+        KeyCode::Char('e') if ctrl => chat.cursor = len,
+        KeyCode::Backspace if cur > 0 => {
+            chat.draft.remove(byte_at(&chat.draft, cur - 1));
+            chat.cursor = cur - 1;
+        }
+        KeyCode::Delete if cur < len => {
+            chat.draft.remove(byte_at(&chat.draft, cur));
+            chat.cursor = cur;
+        }
+        KeyCode::Char(c) if !ctrl => {
+            chat.draft.insert(byte_at(&chat.draft, cur), c);
+            chat.cursor = cur + 1;
+        }
+        _ => {}
+    }
+    vec![]
+}
+
+/// 先頭から n 文字目の byte 位置. n が文字数以上なら末尾
+fn byte_at(s: &str, n: usize) -> usize {
+    s.char_indices().nth(n).map_or(s.len(), |(i, _)| i)
 }
 
 /// 表示位置を動かす. 末尾まで行ったら末尾追従に戻す
@@ -203,6 +231,44 @@ mod tests {
         assert!(chat(&s).sending);
         // 送信中は重ねて送らない
         assert!(handle_key(&mut s, code(KeyCode::Enter)).is_empty());
+    }
+
+    #[test]
+    fn chat_typing_moves_cursor() {
+        let mut s = chat_state();
+        handle_key(&mut s, key('i'));
+        for c in "あいう".chars() {
+            handle_key(&mut s, key(c));
+        }
+        assert_eq!(chat(&s).cursor, 3);
+        // 途中に挿す
+        handle_key(&mut s, code(KeyCode::Left));
+        handle_key(&mut s, code(KeyCode::Left));
+        handle_key(&mut s, key('x'));
+        assert_eq!((chat(&s).draft.as_str(), chat(&s).cursor), ("あxいう", 2));
+        // Backspace は入力位置の前, Delete は入力位置の文字を消す
+        handle_key(&mut s, code(KeyCode::Backspace));
+        handle_key(&mut s, code(KeyCode::Delete));
+        assert_eq!((chat(&s).draft.as_str(), chat(&s).cursor), ("あう", 1));
+        // 端で止まる
+        handle_key(&mut s, code(KeyCode::Home));
+        handle_key(&mut s, code(KeyCode::Left));
+        handle_key(&mut s, code(KeyCode::Backspace));
+        assert_eq!((chat(&s).draft.as_str(), chat(&s).cursor), ("あう", 0));
+        handle_key(&mut s, code(KeyCode::End));
+        handle_key(&mut s, code(KeyCode::Right));
+        handle_key(&mut s, code(KeyCode::Delete));
+        assert_eq!((chat(&s).draft.as_str(), chat(&s).cursor), ("あう", 2));
+        // Emacs 風
+        let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+        handle_key(&mut s, ctrl('a'));
+        assert_eq!(chat(&s).cursor, 0);
+        handle_key(&mut s, ctrl('f'));
+        assert_eq!(chat(&s).cursor, 1);
+        handle_key(&mut s, ctrl('e'));
+        handle_key(&mut s, ctrl('b'));
+        assert_eq!(chat(&s).cursor, 1);
+        assert_eq!(chat(&s).draft, "あう");
     }
 
     #[test]
