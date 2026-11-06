@@ -25,11 +25,18 @@ fn render_chat(f: &mut Frame, area: Rect, header: Line<'static>, state: &mut App
     let Some(chat) = state.chat.as_mut() else {
         return;
     };
-    // 入力欄は折り返して高さを行数に合わせる. 画面の半分を超える分は先頭を隠して末尾 (カーソル側) を見せる
-    let input =
-        input_line(chat.typing, &chat.draft).map(|l| Paragraph::new(l).wrap(Wrap { trim: false }));
+    // 入力欄は折り返して高さを行数に合わせる. 画面の半分を超える分は, 入力位置の行が下端に来るように先頭を隠す
+    let wrap = |l: Line<'static>| Paragraph::new(l).wrap(Wrap { trim: false });
+    let input = input_line(chat.typing, &chat.draft, chat.cursor).map(wrap);
     let input_lines = input.as_ref().map_or(0, |p| p.line_count(area.width));
     let input_height = input_lines.min(usize::from(area.height / 2).max(1)) as u16;
+    // 入力位置までの行数. 入力位置の文字を末尾のカーソルに置き換えた行で数える
+    let cursor_lines = if chat.typing {
+        let head = &chat.draft[..byte_at(&chat.draft, chat.cursor)];
+        input_line(true, head, usize::MAX).map_or(0, |l| wrap(l).line_count(area.width))
+    } else {
+        input_lines
+    };
     let [header_area, body, input_area, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
@@ -49,7 +56,7 @@ fn render_chat(f: &mut Frame, area: Rect, header: Line<'static>, state: &mut App
     f.render_widget(para.scroll((offset.min(u16::MAX as usize) as u16, 0)), body);
 
     if let Some(input) = input {
-        let hidden = input_lines.saturating_sub(input_area.height as usize);
+        let hidden = cursor_lines.saturating_sub(input_area.height as usize);
         f.render_widget(
             input.scroll((hidden.min(u16::MAX as usize) as u16, 0)),
             input_area,
@@ -124,20 +131,36 @@ fn speaker_span(m: &DevinMessage) -> Span<'static> {
     }
 }
 
-/// 入力中か書きかけがあるときだけ出す. 改行は `⏎` にして 1 つの Line にし, 描画側で折り返す
-fn input_line(typing: bool, draft: &str) -> Option<Line<'static>> {
+/// 入力中か書きかけがあるときだけ出す. 改行は `⏎` にして 1 つの Line にし, 描画側で折り返す.
+/// 入力中は cursor (文字数) の位置の文字を反転し, 末尾なら `█` を足す
+fn input_line(typing: bool, draft: &str, cursor: usize) -> Option<Line<'static>> {
     if !typing && draft.is_empty() {
         return None;
     }
+    let text = draft.replace('\n', "⏎");
     // 空白の無い長い入力が `> ` の直後で折り返されないように NBSP で繋ぐ
-    let mut spans = vec![
-        Span::raw(">\u{a0}").cyan().bold(),
-        Span::raw(draft.replace('\n', "⏎")),
-    ];
-    if typing {
-        spans.push(Span::raw("█"));
+    let mut spans = vec![Span::raw(">\u{a0}").cyan().bold()];
+    if !typing {
+        spans.push(Span::raw(text));
+        return Some(Line::from(spans));
+    }
+    let at = byte_at(&text, cursor);
+    let (head, rest) = text.split_at(at);
+    spans.push(Span::raw(head.to_string()));
+    match rest.chars().next() {
+        Some(c) => {
+            let (cur, tail) = rest.split_at(c.len_utf8());
+            spans.push(Span::raw(cur.to_string()).reversed());
+            spans.push(Span::raw(tail.to_string()));
+        }
+        None => spans.push(Span::raw("█")),
     }
     Some(Line::from(spans))
+}
+
+/// 先頭から n 文字目の byte 位置. n が文字数以上なら末尾
+fn byte_at(s: &str, n: usize) -> usize {
+    s.char_indices().nth(n).map_or(s.len(), |(i, _)| i)
 }
 
 /// 送信中, エラー, キー一覧の順に優先する
@@ -275,10 +298,35 @@ mod tests {
 
     #[test]
     fn input_only_when_typing_or_draft() {
-        assert!(input_line(false, "").is_none());
-        assert_eq!(input_line(false, "a\nb").unwrap().to_string(), ">\u{a0}a⏎b");
-        assert_eq!(input_line(true, "a\nb").unwrap().to_string(), ">\u{a0}a⏎b█");
-        assert_eq!(input_line(true, "").unwrap().to_string(), ">\u{a0}█");
+        assert!(input_line(false, "", 0).is_none());
+        assert_eq!(
+            input_line(false, "a\nb", 0).unwrap().to_string(),
+            ">\u{a0}a⏎b"
+        );
+        assert_eq!(
+            input_line(true, "a\nb", 3).unwrap().to_string(),
+            ">\u{a0}a⏎b█"
+        );
+        assert_eq!(input_line(true, "", 0).unwrap().to_string(), ">\u{a0}█");
+    }
+
+    #[test]
+    fn input_cursor_in_middle_is_reversed() {
+        let line = input_line(true, "あいう", 1).unwrap();
+        assert_eq!(line.to_string(), ">\u{a0}あいう");
+        assert_eq!(line.spans[2].content, "い");
+        assert!(
+            line.spans[2]
+                .style
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
+        assert!(
+            !line.spans[1]
+                .style
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
     }
 
     #[test]
@@ -357,7 +405,7 @@ mod tests {
         let mut s = state(vec![message(true, None, &"x".repeat(25))]);
         let chat = s.chat.as_mut().unwrap();
         chat.typing = true;
-        chat.draft = "hi".into();
+        chat.set_draft("hi".into());
         // 幅 20 で本文 25 文字は 2 行. 発言者と空行を足して 4 行. 欄は 6 - 3 = 3 行
         let rows = render(&mut s, 20, 6);
         let chat = s.chat.as_ref().unwrap();
@@ -372,7 +420,7 @@ mod tests {
         let mut s = state(five_messages());
         let chat = s.chat.as_mut().unwrap();
         chat.typing = true;
-        chat.draft = "a".repeat(25);
+        chat.set_draft("a".repeat(25));
         // "> " + 25 文字 + "█" = 28 文字は幅 20 で 2 行. 欄は 8 - 2 - 2 = 4 行
         let rows = render(&mut s, 20, 8);
         assert_eq!(s.chat.as_ref().unwrap().viewport_height, 4);
@@ -386,12 +434,24 @@ mod tests {
         let mut s = state(five_messages());
         let chat = s.chat.as_mut().unwrap();
         chat.typing = true;
-        chat.draft = format!("{}z", "a".repeat(99));
+        chat.set_draft(format!("{}z", "a".repeat(99)));
         // 103 文字は幅 20 で 6 行. 高さ 8 の半分の 4 行に抑え, 末尾を出す
         let rows = render(&mut s, 20, 8);
         assert_eq!(s.chat.as_ref().unwrap().viewport_height, 2);
         assert_eq!(rows[3], "a".repeat(20));
         assert_eq!(rows[6], "az█");
         assert!(rows[7].contains("Enter"), "{rows:?}");
+    }
+
+    #[test]
+    fn render_long_input_shows_cursor_line() {
+        let mut s = state(five_messages());
+        let chat = s.chat.as_mut().unwrap();
+        chat.typing = true;
+        chat.set_draft(format!("{}z", "a".repeat(99)));
+        chat.cursor = 0;
+        // 入力位置が先頭なら先頭の行から出す
+        let rows = render(&mut s, 20, 8);
+        assert_eq!(rows[3], format!(">\u{a0}{}", "a".repeat(18)));
     }
 }

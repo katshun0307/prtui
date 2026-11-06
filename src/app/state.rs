@@ -38,8 +38,10 @@ pub struct ChatView {
     pub viewport_height: u16,
     /// 1 行入力中
     pub typing: bool,
-    /// 書きかけのメッセージ. 送信が成功するまで消さない
+    /// 書きかけのメッセージ. 送信が成功するまで消さない. 書き換えるときは `set_draft` で cursor も合わせる
     pub draft: String,
+    /// draft の中の入力位置. 先頭からの文字数 (byte ではない)
+    pub cursor: usize,
     pub sending: bool,
     /// 会話ビューのフッターに出すエラー
     pub error: Option<String>,
@@ -52,6 +54,12 @@ impl ChatView {
             number,
             ..Default::default()
         }
+    }
+
+    /// draft を差し替え, 入力位置を末尾に置く
+    pub fn set_draft(&mut self, draft: String) {
+        self.cursor = draft.chars().count();
+        self.draft = draft;
     }
 }
 
