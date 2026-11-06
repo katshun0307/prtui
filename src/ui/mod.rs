@@ -233,8 +233,14 @@ fn footer_line(state: &AppState) -> Line<'static> {
     // 数字キーは 9 までのタブにしか届かない
     let tab_key = format!("Tab/1-{}", state.tabs().len().min(9));
     let head = [("j/k", "移動"), (tab_key.as_str(), "タブ")];
+    // 設定が無ければエラーになるだけのキーは出さない. `L` と `V` は設定が要らないので残す
+    let configured = |key: &str| match key {
+        "l" => state.local.linear_workspace.is_some(),
+        "v" => state.local.devin.is_some(),
+        _ => true,
+    };
     let mut spans = vec![Span::raw(" ")];
-    for &(key, label) in head.iter().chain(keys) {
+    for &(key, label) in head.iter().chain(keys).filter(|(k, _)| configured(k)) {
         spans.push(Span::raw(key.to_string()).cyan());
         spans.push(Span::raw(format!(" {label}  ")).fg(DIM));
     }
@@ -254,6 +260,7 @@ mod tests {
     use crate::app::LabelMenu;
     use crate::app::Tab;
     use crate::domain::copy::copy_items;
+    use crate::domain::devin::DevinConfig;
     use crate::domain::label::Label;
     use crate::domain::local::{LocalState, TabQuery};
     use crate::domain::op::PrOp;
@@ -340,7 +347,11 @@ mod tests {
                 name: "マージ予定".into(),
                 query: "label:merge".into(),
             }],
-            ..Default::default()
+            linear_workspace: Some("acme".into()),
+            devin: Some(DevinConfig {
+                token: "t".into(),
+                org: "org-1".into(),
+            }),
         }
     }
 
@@ -691,6 +702,18 @@ mod tests {
         menu.error = Some("ラベル一覧の取得失敗: HTTP 502".into());
         s.label_menu = Some(menu);
         insta::assert_snapshot!(screen(&terminal(&mut s)));
+    }
+
+    /// Devin と Linear の設定が無ければ, 空になるだけの Devin 列とエラーになるだけのキーを出さない
+    #[test]
+    fn without_devin_and_linear() {
+        let mut s = state();
+        s.local.devin = None;
+        s.local.linear_workspace = None;
+        let mut out = screen(&terminal(&mut s));
+        s.tab = Tab::Review;
+        out.push_str(&footer(&mut s));
+        insta::assert_snapshot!(out);
     }
 
     #[test]

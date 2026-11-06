@@ -12,11 +12,14 @@ use crate::domain::local::LocalState;
 use crate::domain::pr::{CheckState, MyReview, Pr, ReviewerState};
 
 pub(super) fn draw_table(f: &mut Frame, state: &mut AppState, area: ratatui::layout::Rect) {
-    let columns = match state.tab {
+    let columns: Vec<&Column> = match state.tab {
         Tab::Mine => MINE,
         Tab::Review => REVIEW,
         Tab::Custom(_) => CUSTOM,
-    };
+    }
+    .iter()
+    .filter(|c| (c.shown)(state))
+    .collect();
     let rows: Vec<Row> = state
         .visible()
         .into_iter()
@@ -47,6 +50,12 @@ struct Column {
     header: &'static str,
     width: Constraint,
     cell: fn(&AppState, &Pr) -> Cell<'static>,
+    /// 列を出すかどうか. 連携の設定が無ければ空になるだけの列を隠すのに使う
+    shown: fn(&AppState) -> bool,
+}
+
+fn always(_: &AppState) -> bool {
+    true
 }
 
 /// 幅が固定の列
@@ -59,6 +68,7 @@ const fn col(
         header,
         width: Constraint::Length(width),
         cell,
+        shown: always,
     }
 }
 
@@ -70,13 +80,18 @@ const BEHIND: Column = col("main", 5, |_, p| behind_cell(p));
 const SIZE: Column = col("差分", 12, |_, p| size_cell(p));
 const REVIEWER: Column = col("Reviewer", 13, |_, p| reviewer_cell(p));
 const LOCAL: Column = col("Local", 10, |s, p| local_cell(&s.local, p));
-const DEVIN: Column = col("Devin", 11, |s, p| Cell::from(devin_span(s.devin_for(p))));
+/// Devin の設定が無ければ session を取らず常に空なので出さない
+const DEVIN: Column = Column {
+    shown: |s| s.local.devin.is_some(),
+    ..col("Devin", 11, |s, p| Cell::from(devin_span(s.devin_for(p))))
+};
 const UPDATED: Column = col("更新", 4, |_, p| Cell::from(ago(p.updated_at)).fg(DIM));
 /// 残りの幅を使う. 自分タブ以外は stack をまとめないので字下げしない
 const TITLE: Column = Column {
     header: "タイトル",
     width: Constraint::Fill(1),
     cell: |_, p| Cell::from(p.title.clone()),
+    shown: always,
 };
 
 /// 自分タブ. stack を親の直後に並べるので Stack を出し, タイトルを段に応じて字下げする

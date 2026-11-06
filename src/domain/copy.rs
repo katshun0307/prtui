@@ -10,12 +10,13 @@ pub struct CopyItem {
     pub value: Result<String, String>,
 }
 
-/// PR からコピーできる値を選択キーの順に並べる
+/// PR からコピーできる値を選択キーの順に並べる. Linear issue の URL は workspace が
+/// 未設定なら作れないので項目ごと出さない
 pub fn copy_items(pr: &Pr, linear_workspace: Option<&str>) -> Vec<CopyItem> {
     let key = linear_issue_key(&pr.head_ref_name, &pr.title);
     let no_key = || "issue キーが無い".to_string();
     let item = |key, label, value| CopyItem { key, label, value };
-    vec![
+    let mut items = vec![
         item('b', "ブランチ名", Ok(pr.head_ref_name.clone())),
         item('n', "PR 番号", Ok(format!("#{}", pr.number))),
         item('t', "タイトル", Ok(pr.title.clone())),
@@ -26,16 +27,15 @@ pub fn copy_items(pr: &Pr, linear_workspace: Option<&str>) -> Vec<CopyItem> {
             Ok(format!("[#{} {}]({})", pr.number, pr.title, pr.url)),
         ),
         item('i', "Linear issue キー", key.clone().ok_or_else(no_key)),
-        item(
+    ];
+    if let Some(ws) = linear_workspace {
+        items.push(item(
             'l',
             "Linear issue の URL",
-            match (linear_workspace, &key) {
-                (None, _) => Err("prtui.linear-workspace が未設定".into()),
-                (_, None) => Err(no_key()),
-                (Some(ws), Some(k)) => Ok(issue_url(ws, k)),
-            },
-        ),
-    ]
+            key.map(|k| issue_url(ws, &k)).ok_or_else(no_key),
+        ));
+    }
+    items
 }
 
 #[cfg(test)]
@@ -70,14 +70,14 @@ mod tests {
         pr.title = "キー無し".into();
         let items = copy_items(&pr, None);
         assert!(value(&items, 'i').is_err());
-        assert_eq!(value(&items, 'l'), Err("prtui.linear-workspace が未設定"));
+        assert!(items.iter().all(|i| i.key != 'l'));
         let items = copy_items(&pr, Some("ws"));
         assert_eq!(value(&items, 'l'), Err("issue キーが無い"));
     }
 
     #[test]
     fn keys_are_unique() {
-        let items = copy_items(&Pr::fixture(1, "b", "main"), None);
+        let items = copy_items(&Pr::fixture(1, "b", "main"), Some("ws"));
         let mut keys: Vec<char> = items.iter().map(|i| i.key).collect();
         keys.sort();
         keys.dedup();
