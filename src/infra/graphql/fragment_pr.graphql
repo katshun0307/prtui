@@ -2,7 +2,7 @@ fragment pr on PullRequest {
   number title url state isDraft headRefName headRefOid baseRefName updatedAt reviewDecision mergeable
   additions deletions changedFiles
   author { login }
-  labels(first:20) { nodes { name } }
+  labels(first:20) { nodes { name color } }
   assignees(first:10) { nodes { login } }
   reviewRequests(first:20) { nodes { requestedReviewer {
     ... on User { login }

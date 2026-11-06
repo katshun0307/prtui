@@ -88,7 +88,7 @@ expression: styles(&term)
 22   0 "+120" fg=Green
 22   5 "-12" fg=Red
 22  17 "  threads: " fg=Indexed(245)
-22  40 "  labels: " fg=Indexed(245)
+22  40 "  labels:" fg=Indexed(245)
 23   0 "reviewers: " fg=Indexed(245)
 23  11 "backend (依頼中)" fg=Yellow
 23  29 "katshun (コメント)" fg=Indexed(245)

@@ -1,0 +1,20 @@
+---
+source: src/ui/mod.rs
+expression: "popup.join(\"\\n\")"
+---
+13  41 " > " fg=Cyan BOLD
+13  44 "▏" fg=Cyan
+14  41 " [-] " fg=Red BOLD
+14  46 "● " fg=Rgb(162, 238, 239)
+14  66 "新機能" fg=Indexed(245)
+15  41 " [ ] " fg=Indexed(245)
+15  46 "● " fg=Rgb(215, 58, 74)
+15  66 "壊れている" fg=Indexed(245)
+16  41 " [+] " fg=Green bg=Indexed(237) BOLD
+16  46 "● " fg=Rgb(0, 117, 202) bg=Indexed(237)
+16  48 "docs                                                                   " bg=Indexed(237)
+17  41 " [ ] " fg=Indexed(245)
+17  46 "● " fg=Rgb(112, 87, 255)
+17  66 "最初の 1 件に" fg=Indexed(245)
+22  48 "● " fg=Rgb(162, 238, 239)
+22  59 "● " fg=Rgb(112, 87, 255)

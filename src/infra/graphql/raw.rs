@@ -14,8 +14,10 @@ pub(super) struct Login {
 }
 
 #[derive(Deserialize)]
-pub(super) struct Name {
+pub(super) struct LabelNode {
     pub(super) name: String,
+    #[serde(default)]
+    pub(super) color: String,
 }
 
 #[derive(Deserialize)]
@@ -117,7 +119,7 @@ pub(super) struct RawPr {
     #[serde(default)]
     pub(super) changed_files: u64,
     pub(super) author: Option<Login>,
-    pub(super) labels: Option<Nodes<Name>>,
+    pub(super) labels: Option<Nodes<LabelNode>>,
     pub(super) assignees: Option<Nodes<Login>>,
     pub(super) review_requests: Option<Nodes<ReviewRequest>>,
     pub(super) latest_reviews: Option<Nodes<Review>>,

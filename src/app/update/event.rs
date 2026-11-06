@@ -3,8 +3,10 @@
 use chrono::Utc;
 
 use super::chat::send;
+use super::label::{clamp_cursor, diff_text};
 use crate::app::event::{Effect, Event, WatchUntil};
 use crate::app::state::{AppState, PrList};
+use crate::domain::label::apply_diff;
 use crate::domain::local::is_diverged;
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
@@ -204,6 +206,55 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
                 Err(e) => {
                     chat.error = Some(format!("送信失敗: {e}"));
                     vec![]
+                }
+            }
+        }
+        Event::FetchedLabels(res) => {
+            state.labels_loading = false;
+            match res {
+                Ok(labels) => {
+                    state.repo_labels = labels;
+                    clamp_cursor(state);
+                }
+                // 開いていれば選択画面に出し, 以前の一覧で続けられるようにする
+                Err(e) => {
+                    let text = format!("ラベル一覧の取得失敗: {e}");
+                    match state.label_menu.as_mut() {
+                        Some(m) => m.error = Some(text),
+                        None => state.error(text),
+                    }
+                }
+            }
+            vec![]
+        }
+        Event::EditedLabels {
+            number: n,
+            add,
+            remove,
+            res,
+        } => {
+            state.busy = None;
+            match res {
+                Ok(_) => {
+                    state.info(format!(
+                        "#{n} のラベルを変えた: {}",
+                        diff_text(&add, &remove)
+                    ));
+                    let labels = state
+                        .pr(n)
+                        .map(|p| apply_diff(&p.label_names(), &add, &remove))
+                        .unwrap_or_else(|| add.clone());
+                    vec![Effect::Watch {
+                        number: n,
+                        until: WatchUntil::Labels(labels),
+                    }]
+                }
+                Err(e) => {
+                    state.error(format!("#{n} のラベル変更失敗: {e}"));
+                    vec![Effect::Watch {
+                        number: n,
+                        until: WatchUntil::Immediately,
+                    }]
                 }
             }
         }

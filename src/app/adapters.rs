@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use super::ports::{CacheStore, Desktop, Devin, Git, Github, Ports};
 use crate::domain::cache::Cache;
 use crate::domain::devin::{DevinConfig, DevinMessage, DevinSession};
+use crate::domain::label::Label;
 use crate::domain::local::LocalState;
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
@@ -54,6 +55,14 @@ impl Github for GhCli {
 
     fn linear_review_url(&self, number: u64) -> Result<Option<String>> {
         gh::linear_review_url(&self.dir, &self.repo, number)
+    }
+
+    fn fetch_labels(&self) -> Result<Vec<Label>> {
+        gh::fetch_labels(&self.dir, &self.repo)
+    }
+
+    fn edit_labels(&self, number: u64, add: &[String], remove: &[String]) -> Result<String> {
+        gh::edit_labels(&self.dir, number, add, remove)
     }
 }
 

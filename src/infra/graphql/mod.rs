@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 
+use crate::domain::label::Label;
 use crate::domain::pr::{Check, CheckState, MyReview, Pr, Reviewer, ReviewerState};
 
 pub(crate) use query::{QUERY, QUERY_CUSTOM, QUERY_ONE, QUERY_REVIEW};
@@ -190,7 +191,16 @@ fn convert(r: RawPr) -> Option<Pr> {
         mergeable: r.mergeable,
         labels: r
             .labels
-            .map(|l| l.nodes.into_iter().map(|n| n.name).collect())
+            .map(|l| {
+                l.nodes
+                    .into_iter()
+                    .map(|n| Label {
+                        name: n.name,
+                        color: n.color,
+                        description: String::new(),
+                    })
+                    .collect()
+            })
             .unwrap_or_default(),
         assignees: r
             .assignees
@@ -438,7 +448,7 @@ mod tests {
             "updatedAt":"2026-01-02T03:04:05Z","reviewDecision":null,"mergeable":"CONFLICTING",
             "additions":10,"deletions":2,"changedFiles":3,
             "author":{"login":"me"},
-            "labels":{"nodes":[{"name":"bug"}]},
+            "labels":{"nodes":[{"name":"bug","color":"d73a4a"}]},
             "assignees":{"nodes":[{"login":"me"}]},
             "reviewRequests":{"nodes":[{"requestedReviewer":{"login":"alice"}}]},
             "latestReviews":{"nodes":[{"state":"COMMENTED","author":{"login":"me"}}]},
@@ -457,7 +467,8 @@ mod tests {
         assert!(p.is_conflicting());
         assert_eq!(p.head_ref_name, "feat");
         assert_eq!(p.base_ref_name, "main");
-        assert_eq!(p.labels, vec!["bug"]);
+        assert_eq!(p.label_names(), vec!["bug"]);
+        assert_eq!(p.labels[0].color, "d73a4a");
         assert_eq!(p.assignees, vec!["me"]);
         assert_eq!(
             names(&p.reviewers),

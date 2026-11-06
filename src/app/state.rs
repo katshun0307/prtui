@@ -3,10 +3,11 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use chrono::{DateTime, Utc};
-use ratatui::widgets::TableState;
+use ratatui::widgets::{ListState, TableState};
 
 use crate::domain::copy::CopyItem;
 use crate::domain::devin::{DevinMessage, DevinSession, session_for};
+use crate::domain::label::{Label, label_choices};
 use crate::domain::local::LocalState;
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
@@ -49,6 +50,34 @@ impl ChatView {
         Self {
             session_id,
             number,
+            ..Default::default()
+        }
+    }
+}
+
+/// `a` で開くラベルの選択画面. 自分タブの PR だけが対象
+#[derive(Debug, Default)]
+pub struct LabelMenu {
+    pub number: u64,
+    /// 開いたときに PR に付いていたラベル. 並びと差分の基準
+    pub before: Vec<String>,
+    /// 付いた状態にするラベル. Tab で切り替える
+    pub chosen: Vec<String>,
+    /// 絞り込みの入力
+    pub query: String,
+    /// 絞り込んだ選択肢の中の位置. スクロール位置は描画が書く
+    pub list: ListState,
+    /// ラベル一覧の取得失敗
+    pub error: Option<String>,
+}
+
+impl LabelMenu {
+    pub fn new(number: u64, labels: Vec<String>) -> Self {
+        Self {
+            number,
+            chosen: labels.clone(),
+            before: labels,
+            list: ListState::default().with_selected(Some(0)),
             ..Default::default()
         }
     }
@@ -164,6 +193,11 @@ pub struct AppState {
     pub confirm_op: Option<(u64, PrOp)>,
     /// `c` で開いたコピー選択画面の項目. 開いたときの PR から作る
     pub copy_menu: Option<Vec<CopyItem>>,
+    /// `a` で開いたラベルの選択画面
+    pub label_menu: Option<LabelMenu>,
+    /// repo のラベル. 選択画面を開くたびに取り直す
+    pub repo_labels: Vec<Label>,
+    pub labels_loading: bool,
     pub last_fetch: Option<Instant>,
     /// 操作の反映を待って取り直している PR 番号
     pub syncing: HashSet<u64>,
@@ -199,6 +233,9 @@ impl AppState {
             confirm_force_checkout: None,
             confirm_op: None,
             copy_menu: None,
+            label_menu: None,
+            repo_labels: Vec::new(),
+            labels_loading: false,
             last_fetch: None,
             syncing: HashSet::new(),
             devin_sessions: Vec::new(),
@@ -255,6 +292,14 @@ impl AppState {
     /// 自分タブの PR. 操作の対象を番号で引く
     pub fn pr(&self, n: u64) -> Option<&Pr> {
         self.mine.prs.iter().find(|p| p.number == n)
+    }
+
+    /// ラベルの選択画面に並べる選択肢. 開いていなければ空
+    pub fn label_choices(&self) -> Vec<Label> {
+        self.label_menu
+            .as_ref()
+            .map(|m| label_choices(&self.repo_labels, &m.before, &m.query))
+            .unwrap_or_default()
     }
 
     /// 会話ビューで開いている session

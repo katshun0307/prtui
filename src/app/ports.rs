@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 
 use crate::domain::cache::Cache;
 use crate::domain::devin::{DevinConfig, DevinMessage, DevinSession};
+use crate::domain::label::Label;
 use crate::domain::local::LocalState;
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
@@ -26,6 +27,9 @@ pub trait Github: Send + Sync + 'static {
     fn checkout(&self, number: u64, force: bool) -> Result<String>;
     fn change_state(&self, number: u64, op: PrOp, targets: &[String]) -> Result<String>;
     fn view_web(&self, number: u64) -> Result<()>;
+    /// repo のラベル全件
+    fn fetch_labels(&self) -> Result<Vec<Label>>;
+    fn edit_labels(&self, number: u64, add: &[String], remove: &[String]) -> Result<String>;
     /// Linear の bot のコメントに見つからなければ None
     fn linear_review_url(&self, number: u64) -> Result<Option<String>>;
 }
@@ -99,6 +103,7 @@ pub(crate) mod fake {
     use super::{CacheStore, Desktop, Devin, Git, Github, Ports};
     use crate::domain::cache::Cache;
     use crate::domain::devin::{DevinConfig, DevinMessage, DevinSession};
+    use crate::domain::label::Label;
     use crate::domain::local::LocalState;
     use crate::domain::op::PrOp;
     use crate::domain::pr::Pr;
@@ -115,9 +120,10 @@ pub(crate) mod fake {
         pub custom: Mutex<Result<Vec<Pr>, String>>,
         /// `fetch_pr` が順に返す結果. 最後の 1 つは使い切らずに返し続ける. 空なら Ok(None)
         pub pr: Mutex<VecDeque<Result<Option<Pr>, String>>>,
-        /// update_branch, checkout, change_state, view_web の結果
+        /// update_branch, checkout, change_state, view_web, edit_labels の結果
         pub op: Mutex<Result<String, String>>,
         pub linear: Mutex<Result<Option<String>, String>>,
+        pub labels: Mutex<Result<Vec<Label>, String>>,
     }
 
     impl Default for FakeGh {
@@ -130,6 +136,7 @@ pub(crate) mod fake {
                 pr: Mutex::default(),
                 op: Mutex::new(Ok(String::new())),
                 linear: Mutex::new(Ok(None)),
+                labels: Mutex::new(Ok(vec![])),
             }
         }
     }
@@ -197,6 +204,20 @@ pub(crate) mod fake {
         fn linear_review_url(&self, number: u64) -> Result<Option<String>> {
             self.record(format!("linear_review_url {number}"));
             cloned(&self.linear)
+        }
+
+        fn fetch_labels(&self) -> Result<Vec<Label>> {
+            self.record("fetch_labels".into());
+            cloned(&self.labels)
+        }
+
+        fn edit_labels(&self, number: u64, add: &[String], remove: &[String]) -> Result<String> {
+            self.record(format!(
+                "edit_labels {number} +{} -{}",
+                add.join(","),
+                remove.join(",")
+            ));
+            cloned(&self.op)
         }
     }
 

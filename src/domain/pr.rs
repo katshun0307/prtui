@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::domain::label::Label;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CheckState {
     Success,
@@ -46,7 +48,8 @@ pub struct Pr {
     pub updated_at: DateTime<Utc>,
     pub review_decision: Option<String>,
     pub mergeable: String,
-    pub labels: Vec<String>,
+    /// 名前と色. description は取らないので空
+    pub labels: Vec<Label>,
     pub assignees: Vec<String>,
     /// 依頼中の reviewer と, レビュー済みの reviewer の最新の状態. PR author 自身は含めない
     pub reviewers: Vec<Reviewer>,
@@ -117,6 +120,11 @@ impl Pr {
 
     pub fn is_conflicting(&self) -> bool {
         self.mergeable == "CONFLICTING"
+    }
+
+    /// 付いているラベルの名前. 付け外しの差分と反映待ちは名前で比べる
+    pub fn label_names(&self) -> Vec<String> {
+        self.labels.iter().map(|l| l.name.clone()).collect()
     }
 }
 

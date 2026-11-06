@@ -5,17 +5,20 @@ use ratatui::text::{Line, Span};
 
 use crate::app::AppState;
 use crate::domain::devin::{DevinSession, DevinStatus};
+use crate::domain::label::Label;
 
 mod chat;
 mod copy;
 mod detail;
 pub mod format;
+mod label;
 mod table;
 
 use chat::draw_chat;
 use copy::draw_copy_menu;
 use detail::detail_view;
 use format::ago;
+use label::draw_label_menu;
 use table::draw_table;
 
 /// 配色の意味
@@ -33,6 +36,9 @@ use table::draw_table;
 /// - status: 動いている (new / claimed / running / resuming) は yellow, 返事待ちの suspended は cyan,
 ///   error は red, 終わった exit と unknown は DIM. archived の session は status によらず DIM
 /// - 発言者: Devin は magenta bold, 自分側 (user) は cyan bold. 時刻は DIM
+///
+/// ラベル (詳細欄と選択画面) の名前の前の ● は GitHub で設定したラベルの色をそのまま 24bit 色で出す.
+/// 上の配色の意味とは別で, GitHub の画面と見比べるためのもの
 ///
 /// `Color::DarkGray` は端末テーマによって背景色と同化するので使わない.
 /// 256 色の固定値を使い, 選択行の背景とも区別が付くようにする.
@@ -54,6 +60,14 @@ pub(super) fn devin_style(s: &DevinSession) -> Style {
         DevinStatus::Exit | DevinStatus::Unknown => DIM,
     };
     Style::new().fg(fg)
+}
+
+/// ラベルの色の ●. 色が分からなければ DIM の ○
+pub(super) fn label_dot(l: &Label) -> Span<'static> {
+    match l.rgb() {
+        Some((r, g, b)) => Span::raw("● ").fg(Color::Rgb(r, g, b)),
+        None => Span::raw("○ ").fg(DIM),
+    }
 }
 
 pub fn draw(f: &mut Frame, state: &mut AppState) {
@@ -78,6 +92,9 @@ pub fn draw(f: &mut Frame, state: &mut AppState) {
     f.render_widget(footer_line(state), footer);
     if let Some(items) = &state.copy_menu {
         draw_copy_menu(f, items, f.area());
+    }
+    if state.label_menu.is_some() {
+        draw_label_menu(f, state, f.area());
     }
 }
 
@@ -163,6 +180,15 @@ fn footer_line(state: &AppState) -> Line<'static> {
                 .bold(),
         );
     }
+    if state.label_menu.is_some() {
+        return Line::from(
+            Span::raw(
+                " 文字で絞り込み  ↑↓ 移動  Tab 付け外しを選ぶ  Enter 反映 (選んでいなければカーソルの項目を切り替え)  Esc 閉じる",
+            )
+            .yellow()
+            .bold(),
+        );
+    }
     if let Some(m) = &state.message {
         let span = Span::raw(format!(" {}", m.text));
         return Line::from(if m.is_error { span.red() } else { span.green() });
@@ -175,6 +201,7 @@ fn footer_line(state: &AppState) -> Line<'static> {
         ("DD", "draft"),
         ("XX", "close"),
         ("RR", "review 依頼"),
+        ("a", "ラベル"),
         ("d", "diff"),
         ("o", "ブラウザ"),
         ("l", "Linear"),
@@ -224,8 +251,10 @@ mod tests {
     use ratatui::buffer::Cell;
 
     use super::*;
+    use crate::app::LabelMenu;
     use crate::app::Tab;
     use crate::domain::copy::copy_items;
+    use crate::domain::label::Label;
     use crate::domain::local::{LocalState, TabQuery};
     use crate::domain::op::PrOp;
     use crate::domain::pr::{Check, CheckState, MyReview, Pr, Reviewer, ReviewerState, Stack};
@@ -328,7 +357,10 @@ mod tests {
             reviewer("alice", ReviewerState::Approved),
             reviewer("bob", ReviewerState::Commented),
         ];
-        a.labels = vec!["feature".into()];
+        a.labels = vec![
+            label("feature", "a2eeef", ""),
+            label("good first issue", "7057ff", ""),
+        ];
         a.updated_at = hours_ago(3);
 
         let mut b = pr(2, "feat-b", "feat-a", "土台の上に画面を足す");
@@ -582,6 +614,8 @@ mod tests {
         lines.push(footer(&mut s));
         s.error("チェックアウト失敗: 未コミットの変更がある".into());
         lines.push(footer(&mut s));
+        s.label_menu = Some(LabelMenu::new(1, vec![]));
+        lines.push(footer(&mut s));
         s.copy_menu = Some(vec![]);
         lines.push(footer(&mut s));
         s.confirm_op = Some((3, PrOp::Close));
@@ -595,6 +629,68 @@ mod tests {
         s.busy = Some("#1 に main を取り込み中…".into());
         lines.push(footer(&mut s));
         insta::assert_snapshot!(lines.join("\n"));
+    }
+
+    fn label(name: &str, color: &str, description: &str) -> Label {
+        Label {
+            name: name.into(),
+            color: color.into(),
+            description: description.into(),
+        }
+    }
+
+    /// #1 は feature が付いている. feature を外して docs を足すところ
+    #[test]
+    fn label_menu() {
+        let mut s = state();
+        s.repo_labels = vec![
+            label("feature", "a2eeef", "新機能"),
+            label("bug", "d73a4a", "壊れている"),
+            label("docs", "0075ca", ""),
+            label("good first issue", "7057ff", "最初の 1 件に"),
+        ];
+        let mut menu = LabelMenu::new(1, vec!["feature".into()]);
+        menu.chosen = vec!["docs".into()];
+        menu.list.select(Some(2));
+        s.label_menu = Some(menu);
+        let term = terminal(&mut s);
+        insta::assert_snapshot!(screen(&term));
+        let styles = styles(&term);
+        // ポップアップは 12 行目から下, 41 桁目から右. 一覧の行の style は他の snapshot で見ている
+        let at = |l: &str, r: std::ops::Range<usize>| l[r].trim().parse::<u16>().unwrap_or(0);
+        let popup: Vec<&str> = styles
+            .lines()
+            .filter(|l| at(l, 0..2) >= 12 && at(l, 3..6) >= 41)
+            .collect();
+        insta::assert_snapshot!("label_menu_styles", popup.join("\n"));
+    }
+
+    /// 詳細欄のラベルの前にラベルの色の ● を出す. 色の無いラベルは DIM の ○
+    #[test]
+    fn detail_label_dots() {
+        let mut s = state();
+        s.mine.prs[0].labels.push(label("only-on-pr", "", ""));
+        let styles = styles(&terminal(&mut s));
+        let dots: Vec<&str> = styles
+            .lines()
+            .filter(|l| l.starts_with("22 ") && (l.contains('●') || l.contains('○')))
+            .collect();
+        insta::assert_snapshot!(dots.join("\n"), @r#"
+        22  48 "● " fg=Rgb(162, 238, 239)
+        22  59 "● " fg=Rgb(112, 87, 255)
+        22  79 "○ " fg=Indexed(245)
+        "#);
+    }
+
+    #[test]
+    fn label_menu_loading_and_error() {
+        let mut s = state();
+        s.labels_loading = true;
+        let mut menu = LabelMenu::new(1, vec![]);
+        menu.query = "zz".into();
+        menu.error = Some("ラベル一覧の取得失敗: HTTP 502".into());
+        s.label_menu = Some(menu);
+        insta::assert_snapshot!(screen(&terminal(&mut s)));
     }
 
     #[test]

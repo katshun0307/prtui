@@ -2,10 +2,24 @@ use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
-use super::{DIM, devin_style};
+use super::{DIM, devin_style, label_dot};
 use crate::app::AppState;
 use crate::domain::devin::DevinSession;
 use crate::domain::pr::{CheckState, Pr, ReviewerState};
+
+/// 名前に空白を含むラベルがあるので, ラベルの間は 2 つ空ける
+fn label_spans(p: &Pr) -> Vec<Span<'static>> {
+    p.labels
+        .iter()
+        .flat_map(|l| {
+            [
+                Span::raw(" "),
+                label_dot(l),
+                Span::raw(format!("{} ", l.name)),
+            ]
+        })
+        .collect()
+}
 
 pub(super) fn detail_view(state: &AppState) -> Paragraph<'static> {
     let block = Block::new()
@@ -30,16 +44,20 @@ pub(super) fn detail_view(state: &AppState) -> Paragraph<'static> {
             Span::raw("  assignees: ").fg(DIM),
             Span::raw(p.assignees.join(", ")),
         ]),
-        Line::from(vec![
-            Span::raw(format!("+{}", p.additions)).green(),
-            Span::raw(" "),
-            Span::raw(format!("-{}", p.deletions)).red(),
-            Span::raw(format!("  {} files", p.changed_files)),
-            Span::raw("  threads: ").fg(DIM),
-            Span::raw(format!("未解決 {} / {}", p.threads_open, p.threads_total)),
-            Span::raw("  labels: ").fg(DIM),
-            Span::raw(p.labels.join(", ")),
-        ]),
+        Line::from(
+            vec![
+                Span::raw(format!("+{}", p.additions)).green(),
+                Span::raw(" "),
+                Span::raw(format!("-{}", p.deletions)).red(),
+                Span::raw(format!("  {} files", p.changed_files)),
+                Span::raw("  threads: ").fg(DIM),
+                Span::raw(format!("未解決 {} / {}", p.threads_open, p.threads_total)),
+                Span::raw("  labels:").fg(DIM),
+            ]
+            .into_iter()
+            .chain(label_spans(p))
+            .collect::<Vec<_>>(),
+        ),
         Line::from(reviewer_spans(p)),
     ];
     if let Some(teams) = p.my_review.as_ref().map(|m| &m.via_teams)
