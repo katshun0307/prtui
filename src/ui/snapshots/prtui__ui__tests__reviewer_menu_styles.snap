@@ -1,0 +1,21 @@
+---
+source: src/ui/mod.rs
+expression: "popup.join(\"\\n\")"
+---
+12  41 " > " fg=Cyan BOLD
+12  44 "▏" fg=Cyan
+13  41 " [~] " fg=Green
+13  46 "◆ backend  " BOLD
+13  57 "alice, carol, erin" fg=Indexed(245)
+14  41 " [ ] " fg=Indexed(245)
+14  57 "✓ 承認" fg=Green
+15  41 " [+] " fg=Green bg=Indexed(237) BOLD
+15  46 "  bob      " bg=Indexed(237)
+15  57 "コメント" fg=Indexed(245) bg=Indexed(237)
+15  65 "                                                      " bg=Indexed(237)
+16  41 " [+] " fg=Green BOLD
+17  41 " [ ] " fg=Indexed(245)
+18  57 "依頼中" fg=Yellow
+19 120 "────────────────────────────────────────" fg=Indexed(245)
+22  48 "● " fg=Rgb(162, 238, 239)
+22  59 "● " fg=Rgb(112, 87, 255)

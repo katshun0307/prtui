@@ -136,12 +136,15 @@ impl App {
                             .map_err(|e| e.context(format!("{base} の取り込み失敗")));
                     Event::UpdatedBranch(number, res.map(|_| base))
                 }),
-                Effect::ChangeState {
-                    number,
-                    op,
-                    targets,
-                } => self.spawn(move |p| {
-                    Event::ChangedState(number, op, p.gh.change_state(number, op, &targets))
+                Effect::ChangeState { number, op } => self
+                    .spawn(move |p| Event::ChangedState(number, op, p.gh.change_state(number, op))),
+                Effect::RequestReviews { number, targets } => self.spawn(move |p| {
+                    let res = p.gh.request_reviews(number, &targets);
+                    Event::RequestedReviews {
+                        number,
+                        targets,
+                        res,
+                    }
                 }),
                 Effect::LinearReview(n) => {
                     self.spawn(move |p| Event::LinearReview(n, p.gh.linear_review_url(n)))

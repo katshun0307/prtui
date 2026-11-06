@@ -1,10 +1,10 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Flex, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Stylize;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph};
 
-use super::{DIM, SELECTED_BG, label_dot};
+use super::{DIM, SELECTED_BG, label_dot, popup_area};
 use crate::app::AppState;
 use crate::domain::label::has_label;
 
@@ -57,16 +57,8 @@ pub(super) fn draw_label_menu(f: &mut Frame, state: &mut AppState, area: Rect) {
         status.push(Line::from(Span::raw(text).fg(DIM)));
     }
 
-    let width = area.width.saturating_sub(4).min(80);
-    // 枠 2 行と入力 1 行
-    let rows = (items.len() + status.len()) as u16;
-    let height = (rows + 3).min(area.height.saturating_sub(2)).max(5);
-    let [popup] = Layout::horizontal([Constraint::Length(width)])
-        .flex(Flex::Center)
-        .areas(area);
-    let [popup] = Layout::vertical([Constraint::Length(height)])
-        .flex(Flex::Center)
-        .areas(popup);
+    // 入力 1 行と選択肢
+    let popup = popup_area(area, (items.len() + status.len() + 1) as u16);
     // 選択肢が無いときは本文に取得中と出す
     let title = if loading && !choices.is_empty() {
         format!(" ラベル #{} (取得中…) ", menu.number)

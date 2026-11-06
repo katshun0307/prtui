@@ -11,9 +11,11 @@ pub struct LocalState {
     pub branches: HashMap<String, String>,
     /// git config `prtui.linear-workspace` の値. 未設定なら None
     pub linear_workspace: Option<String>,
-    /// git config `prtui.reviewers` の値. `RR` で review を依頼する相手の login.
+    /// git config `prtui.reviewers` の値. `R` の選択画面に個人として並べる login.
     /// カンマか空白で区切って並べるか, `--add` で 1 人ずつ足す
     pub reviewers: Vec<String>,
+    /// git config `prtui.reviewer-set` の値. `R` の選択画面にまとめて選べる組として並べる
+    pub reviewer_sets: Vec<ReviewerSet>,
     /// git config `prtui.devin-token` と `prtui.devin-org`. どちらかが未設定なら None
     pub devin: Option<DevinConfig>,
     /// git config `prtui.tab` の値. 自分タブとレビュータブの後ろに足すタブ
@@ -26,6 +28,13 @@ pub struct TabQuery {
     pub name: String,
     /// GitHub の検索クエリ. 取得時に `repo:<owner/name> is:pr is:open` を前に付ける
     pub query: String,
+}
+
+/// 名前つきの reviewer の組. git config `prtui.reviewer-set` に `名前=login,login` で書く
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewerSet {
+    pub name: String,
+    pub members: Vec<String>,
 }
 
 /// `gh pr checkout` の失敗が, ローカルの同名ブランチが PR と分岐していて fast-forward できないためか.
@@ -74,9 +83,41 @@ pub(crate) fn parse_tabs(s: &str) -> Vec<TabQuery> {
         .collect()
 }
 
+/// `git config --get-all prtui.reviewer-set` の出力を組の並びにする. 1 行が 1 組で, 最初の `=` で
+/// 名前とメンバーに分け, メンバーは `prtui.reviewers` と同じくカンマか空白で区切る.
+/// `=` が無い行と, 名前かメンバーが空の行は捨てる
+pub(crate) fn parse_reviewer_sets(s: &str) -> Vec<ReviewerSet> {
+    s.lines()
+        .filter_map(|l| l.split_once('='))
+        .map(|(name, members)| ReviewerSet {
+            name: name.trim().to_string(),
+            members: parse_reviewers(members),
+        })
+        .filter(|t| !t.name.is_empty() && !t.members.is_empty())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{TabQuery, parse_reviewers, parse_tabs};
+    use super::{ReviewerSet, TabQuery, parse_reviewer_sets, parse_reviewers, parse_tabs};
+
+    #[test]
+    fn reviewer_sets_split_at_first_equal() {
+        let set = |name: &str, members: &[&str]| ReviewerSet {
+            name: name.into(),
+            members: members.iter().map(|m| m.to_string()).collect(),
+        };
+        assert_eq!(
+            parse_reviewer_sets(
+                "backend=alice, bob\n フロント = carol dave,ALICE \nno-equal\n=x\nempty= , \n"
+            ),
+            vec![
+                set("backend", &["alice", "bob"]),
+                set("フロント", &["carol", "dave", "ALICE"]),
+            ]
+        );
+        assert!(parse_reviewer_sets("").is_empty());
+    }
 
     #[test]
     fn reviewers_from_comma_and_multiple_values() {

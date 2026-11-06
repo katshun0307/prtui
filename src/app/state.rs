@@ -11,6 +11,7 @@ use crate::domain::label::{Label, label_choices};
 use crate::domain::local::LocalState;
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
+use crate::domain::review::{ReviewerChoice, reviewer_choices};
 
 pub struct Message {
     pub text: String,
@@ -91,6 +92,28 @@ impl LabelMenu {
     }
 }
 
+/// `R` で開く review 依頼の選択画面. 自分タブの Draft でない PR だけが対象
+#[derive(Debug, Default)]
+pub struct ReviewerMenu {
+    pub number: u64,
+    /// 依頼する login. Tab で切り替え, 組を選ぶとメンバーをまとめて足す
+    pub chosen: Vec<String>,
+    /// 絞り込みの入力
+    pub query: String,
+    /// 絞り込んだ選択肢の中の位置. スクロール位置は描画が書く
+    pub list: ListState,
+}
+
+impl ReviewerMenu {
+    pub fn new(number: u64) -> Self {
+        Self {
+            number,
+            list: ListState::default().with_selected(Some(0)),
+            ..Default::default()
+        }
+    }
+}
+
 /// 一覧のタブ
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
@@ -104,7 +127,7 @@ pub enum Tab {
 }
 
 impl Tab {
-    /// 他人の PR が混ざるタブ. PR を変える操作 (u, O, DD, XX, RR) は自分タブでしか使わない
+    /// 他人の PR が混ざるタブ. PR を変える操作 (u, O, DD, XX, R, a) は自分タブでしか使わない
     pub fn is_readonly(self) -> bool {
         self != Tab::Mine
     }
@@ -184,7 +207,7 @@ pub struct AppState {
     pub dir: PathBuf,
     pub repo: String,
     pub tab: Tab,
-    /// 自分タブ. 操作 (u, O, DD, XX, RR) と 1 件の取り直しはこちらだけが対象
+    /// 自分タブ. 操作 (u, O, DD, XX, R, a) と 1 件の取り直しはこちらだけが対象
     pub mine: PrList,
     pub review: PrList,
     /// 追加のタブ. 自分タブとレビュータブの後ろに並べる
@@ -203,6 +226,8 @@ pub struct AppState {
     pub copy_menu: Option<Vec<CopyItem>>,
     /// `a` で開いたラベルの選択画面
     pub label_menu: Option<LabelMenu>,
+    /// `R` で開いた review 依頼の選択画面
+    pub reviewer_menu: Option<ReviewerMenu>,
     /// repo のラベル. 選択画面を開くたびに取り直す
     pub repo_labels: Vec<Label>,
     pub labels_loading: bool,
@@ -242,6 +267,7 @@ impl AppState {
             confirm_op: None,
             copy_menu: None,
             label_menu: None,
+            reviewer_menu: None,
             repo_labels: Vec::new(),
             labels_loading: false,
             last_fetch: None,
@@ -307,6 +333,23 @@ impl AppState {
         self.label_menu
             .as_ref()
             .map(|m| label_choices(&self.repo_labels, &m.before, &m.query))
+            .unwrap_or_default()
+    }
+
+    /// review 依頼の選択画面に並べる選択肢. 開いていないか, PR が一覧から消えていれば空
+    pub fn reviewer_choices(&self) -> Vec<ReviewerChoice> {
+        let Some(menu) = &self.reviewer_menu else {
+            return vec![];
+        };
+        self.pr(menu.number)
+            .map(|p| {
+                reviewer_choices(
+                    p,
+                    &self.local.reviewers,
+                    &self.local.reviewer_sets,
+                    &menu.query,
+                )
+            })
             .unwrap_or_default()
     }
 

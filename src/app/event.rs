@@ -32,6 +32,12 @@ pub enum Event {
     Composed(Result<Option<String>>),
     /// repo のラベル一覧
     FetchedLabels(Result<Vec<Label>>),
+    /// review を依頼した結果. targets は依頼した相手
+    RequestedReviews {
+        number: u64,
+        targets: Vec<String>,
+        res: Result<String>,
+    },
     /// PR のラベルを付け外した結果. add と remove は依頼した差分
     EditedLabels {
         number: u64,
@@ -78,6 +84,10 @@ pub enum Effect {
     ChangeState {
         number: u64,
         op: PrOp,
+    },
+    /// targets に review を依頼する. レビュー済みの人には再依頼になる
+    RequestReviews {
+        number: u64,
         targets: Vec<String>,
     },
     LinearReview(u64),

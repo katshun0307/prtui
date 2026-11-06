@@ -45,8 +45,12 @@ impl Github for GhCli {
         gh::checkout(&self.dir, number, force)
     }
 
-    fn change_state(&self, number: u64, op: PrOp, targets: &[String]) -> Result<String> {
-        gh::change_state(&self.dir, number, op, targets)
+    fn change_state(&self, number: u64, op: PrOp) -> Result<String> {
+        gh::change_state(&self.dir, number, op)
+    }
+
+    fn request_reviews(&self, number: u64, targets: &[String]) -> Result<String> {
+        gh::request_reviews(&self.dir, number, targets)
     }
 
     fn view_web(&self, number: u64) -> Result<()> {

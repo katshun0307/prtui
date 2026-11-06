@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 
+use crate::domain::local::ReviewerSet;
 use crate::domain::pr::{Pr, ReviewerState};
 
 /// レビュータブの並び. 依頼中 (再依頼を含む) を先に, 依頼を受けた時刻の古い順に並べる.
@@ -41,9 +42,114 @@ pub fn review_targets<'a>(pr: &Pr, reviewers: &'a [String]) -> Vec<&'a str> {
         .collect()
 }
 
+/// GitHub の login は大文字小文字を区別しない
+pub fn same_login(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
+}
+
+/// PR での今の状態. PR に居なければ None
+fn state_of(pr: &Pr, login: &str) -> Option<ReviewerState> {
+    pr.reviewers
+        .iter()
+        .find(|r| same_login(&r.name, login))
+        .map(|r| r.state)
+}
+
+/// `R` の選択画面の 1 行
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewerChoice {
+    /// git config `prtui.reviewer-set` の組. members は PR author を除いた全員
+    Set { name: String, members: Vec<String> },
+    /// 個人. state は PR での今の状態で, PR に居なければ None
+    Person {
+        login: String,
+        state: Option<ReviewerState>,
+    },
+}
+
+impl ReviewerChoice {
+    /// 選んだときに依頼する login. 既に依頼中の人は除く
+    pub fn targets(&self, pr: &Pr) -> Vec<String> {
+        let members = match self {
+            ReviewerChoice::Set { members, .. } => members.as_slice(),
+            ReviewerChoice::Person { login, .. } => std::slice::from_ref(login),
+        };
+        review_targets(pr, members)
+            .into_iter()
+            .map(String::from)
+            .collect()
+    }
+
+    fn matches(&self, query: &str) -> bool {
+        let hit = |s: &str| s.to_lowercase().contains(query);
+        match self {
+            ReviewerChoice::Set { name, members } => hit(name) || members.iter().any(|m| hit(m)),
+            ReviewerChoice::Person { login, .. } => hit(login),
+        }
+    }
+}
+
+/// `R` の選択画面に並べる行. 組を設定の順に先に並べ, 個人は
+/// 再依頼できるレビュー済みの人 (コメントのみを含む), 設定にあって PR に居ない人
+/// (`prtui.reviewers`, 組のメンバーの順), 依頼中の人の順に並べる. PR author は出さない.
+/// レビュー済みの人は設定に無くても出すので, コメントだけした人にも再依頼できる.
+/// `query` は組の名前, メンバー, login の部分一致 (大文字小文字を無視) で絞る
+pub fn reviewer_choices(
+    pr: &Pr,
+    people: &[String],
+    sets: &[ReviewerSet],
+    query: &str,
+) -> Vec<ReviewerChoice> {
+    let not_author = |l: &&String| !same_login(l, &pr.author);
+    let mut out: Vec<ReviewerChoice> = sets
+        .iter()
+        .map(|s| ReviewerChoice::Set {
+            name: s.name.clone(),
+            members: s.members.iter().filter(not_author).cloned().collect(),
+        })
+        .filter(|c| matches!(c, ReviewerChoice::Set { members, .. } if !members.is_empty()))
+        .collect();
+
+    let reviewed = pr
+        .reviewers
+        .iter()
+        .filter(|r| r.state != ReviewerState::Requested)
+        .map(|r| &r.name);
+    let configured = people
+        .iter()
+        .chain(sets.iter().flat_map(|s| &s.members))
+        .filter(|l| state_of(pr, l).is_none());
+    let requested = pr
+        .reviewers
+        .iter()
+        .filter(|r| r.state == ReviewerState::Requested)
+        .map(|r| &r.name);
+    let mut logins: Vec<&String> = vec![];
+    for l in reviewed
+        .chain(configured)
+        .chain(requested)
+        .filter(not_author)
+    {
+        if !logins.iter().any(|x| same_login(x, l)) {
+            logins.push(l);
+        }
+    }
+    out.extend(logins.into_iter().map(|l| ReviewerChoice::Person {
+        login: l.clone(),
+        state: state_of(pr, l),
+    }));
+
+    let q = query.to_lowercase();
+    out.retain(|c| c.matches(&q));
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{arrange_reviews, review_targets};
+    use pretty_assertions::assert_eq;
+
+    use super::{ReviewerChoice, arrange_reviews, review_targets, reviewer_choices};
+    use crate::domain::local::ReviewerSet;
     use crate::domain::pr::{MyReview, Pr, Reviewer, ReviewerState};
 
     #[test]
@@ -115,6 +221,98 @@ mod tests {
         assert_eq!(
             review_targets(&p, &configured()),
             vec!["alice", "bobBuilder"]
+        );
+    }
+
+    fn strings(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn set(name: &str, members: &[&str]) -> ReviewerSet {
+        ReviewerSet {
+            name: name.into(),
+            members: strings(members),
+        }
+    }
+
+    fn person(login: &str, state: Option<ReviewerState>) -> ReviewerChoice {
+        ReviewerChoice::Person {
+            login: login.into(),
+            state,
+        }
+    }
+
+    /// author は me. alice は依頼中, carol はコメントのみ, dave は承認済み
+    fn reviewed_pr() -> Pr {
+        let mut p = Pr::fixture(1, "a", "main");
+        p.author = "me".into();
+        p.reviewers = vec![
+            reviewer("Alice", ReviewerState::Requested),
+            reviewer("carol", ReviewerState::Commented),
+            reviewer("dave", ReviewerState::Approved),
+        ];
+        p
+    }
+
+    #[test]
+    fn choices_sets_then_reviewed_configured_requested() {
+        let p = reviewed_pr();
+        let sets = vec![
+            set("backend", &["alice", "bob", "ME"]),
+            set("only-me", &["me"]),
+        ];
+        let got = reviewer_choices(&p, &strings(&["bob", "erin", "me"]), &sets, "");
+        assert_eq!(
+            got,
+            vec![
+                // author は組からも除き, 誰も残らない組は出さない
+                ReviewerChoice::Set {
+                    name: "backend".into(),
+                    members: strings(&["alice", "bob"]),
+                },
+                person("carol", Some(ReviewerState::Commented)),
+                person("dave", Some(ReviewerState::Approved)),
+                person("bob", None),
+                person("erin", None),
+                person("Alice", Some(ReviewerState::Requested)),
+            ]
+        );
+    }
+
+    #[test]
+    fn choices_filter_by_name_member_or_login() {
+        let p = reviewed_pr();
+        let sets = vec![set("backend", &["bob"]), set("front", &["frank"])];
+        let got = reviewer_choices(&p, &[], &sets, "BO");
+        assert_eq!(
+            got,
+            vec![
+                ReviewerChoice::Set {
+                    name: "backend".into(),
+                    members: strings(&["bob"]),
+                },
+                person("bob", None),
+            ]
+        );
+        assert_eq!(reviewer_choices(&p, &[], &sets, "fro").len(), 1);
+    }
+
+    #[test]
+    fn choice_targets_skip_requested() {
+        let p = reviewed_pr();
+        let backend = ReviewerChoice::Set {
+            name: "backend".into(),
+            members: strings(&["alice", "bob", "carol"]),
+        };
+        assert_eq!(backend.targets(&p), strings(&["bob", "carol"]));
+        assert!(
+            person("Alice", Some(ReviewerState::Requested))
+                .targets(&p)
+                .is_empty()
+        );
+        assert_eq!(
+            person("carol", Some(ReviewerState::Commented)).targets(&p),
+            strings(&["carol"])
         );
     }
 }

@@ -75,9 +75,14 @@ pub fn checkout(dir: &Path, number: u64, force: bool) -> Result<String> {
     gh(dir, &checkout_args(number, force))
 }
 
-/// PR の状態を変える. Review のときは targets を `--add-reviewer` に渡す
-pub fn change_state(dir: &Path, number: u64, op: PrOp, targets: &[String]) -> Result<String> {
-    gh(dir, &change_state_args(number, op, targets))
+/// PR の状態を変える
+pub fn change_state(dir: &Path, number: u64, op: PrOp) -> Result<String> {
+    gh(dir, &change_state_args(number, op))
+}
+
+/// targets に review を依頼する. レビュー済みの人に依頼すると再依頼になる
+pub fn request_reviews(dir: &Path, number: u64, targets: &[String]) -> Result<String> {
+    gh(dir, &request_reviews_args(number, targets))
 }
 
 /// repo のラベルを全件返す. 並びは選択画面で決めるので gh の既定のまま
@@ -236,14 +241,23 @@ fn checkout_args(number: u64, force: bool) -> Vec<String> {
     args
 }
 
-fn change_state_args(number: u64, op: PrOp, targets: &[String]) -> Vec<String> {
+fn change_state_args(number: u64, op: PrOp) -> Vec<String> {
     let n = number.to_string();
     match op {
         PrOp::Open => strings(["pr", "ready", &n]),
         PrOp::Draft => strings(["pr", "ready", &n, "--undo"]),
         PrOp::Close => strings(["pr", "close", &n]),
-        PrOp::Review => strings(["pr", "edit", &n, "--add-reviewer", &targets.join(",")]),
     }
+}
+
+fn request_reviews_args(number: u64, targets: &[String]) -> Vec<String> {
+    strings([
+        "pr",
+        "edit",
+        &number.to_string(),
+        "--add-reviewer",
+        &targets.join(","),
+    ])
 }
 
 #[cfg(test)]
@@ -416,21 +430,19 @@ mod tests {
 
     #[test]
     fn change_state_per_op() {
-        let targets = ["a".to_string(), "b".to_string()];
+        assert_eq!(change_state_args(7, PrOp::Open), ["pr", "ready", "7"]);
         assert_eq!(
-            change_state_args(7, PrOp::Open, &targets),
-            ["pr", "ready", "7"]
-        );
-        assert_eq!(
-            change_state_args(7, PrOp::Draft, &targets),
+            change_state_args(7, PrOp::Draft),
             ["pr", "ready", "7", "--undo"]
         );
+        assert_eq!(change_state_args(7, PrOp::Close), ["pr", "close", "7"]);
+    }
+
+    #[test]
+    fn request_reviews_joins_targets() {
+        let targets = ["a".to_string(), "b".to_string()];
         assert_eq!(
-            change_state_args(7, PrOp::Close, &targets),
-            ["pr", "close", "7"]
-        );
-        assert_eq!(
-            change_state_args(7, PrOp::Review, &targets),
+            request_reviews_args(7, &targets),
             ["pr", "edit", "7", "--add-reviewer", "a,b"]
         );
     }

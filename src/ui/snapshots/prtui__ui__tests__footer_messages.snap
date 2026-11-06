@@ -2,14 +2,14 @@
 source: src/ui/mod.rs
 expression: "lines.join(\"\\n\")"
 ---
- j/k 移動  Tab/1-3 タブ  Enter checkout  c コピー  u main 取込  O open  DD draft  XX close  RR review 依頼  a ラベル  d diff  o ブラウザ  l Linear  L Linear rev
+ j/k 移動  Tab/1-3 タブ  Enter checkout  c コピー  u main 取込  O open  DD draft  XX close  R review 依頼  a ラベル  d diff  o ブラウザ  l Linear  L Linear revi
  j/k 移動  Tab/1-3 タブ  Enter checkout  c コピー  d diff  o ブラウザ  l Linear  L Linear review  v Devin  V Devin Review  t Draft のみ  r 更新  q 終了
  #1 をチェックアウトした
  チェックアウト失敗: 未コミットの変更がある
+ 文字で絞り込み  ↑↓ 移動  Tab 依頼する相手を選ぶ (組はメンバー全員)  Enter 依頼 (選んでいなければカーソルの項目)  Esc 閉じる
  文字で絞り込み  ↑↓ 移動  Tab 付け外しを選ぶ  Enter 反映 (選んでいなければカーソルの項目を切り替え)  Esc 閉じる
  コピーする項目のキーを押す. 他のキーで閉じる
  #3 を close にする? もう一度 X で実行, 他のキーで取りやめ
- #1 を alice, bob に review 依頼する? もう一度 R で実行, 他のキーで取りやめ
  #2: ローカルの feat-b が PR と分岐している. ローカルだけのコミットを捨てて PR の最新に合わせる? (y/N)
  #1 に main を merge commit で取り込んで push する? (y/N)
  #1 に main を取り込み中…
