@@ -110,6 +110,8 @@ git config --add prtui.tab '承認待ち=review:required -is:draft'
 
 追加のタブのクエリは [GitHub の検索構文](https://docs.github.com/ja/search-github/searching-on-github/searching-issues-and-pull-requests) で書く. 前に `repo:<owner/name> is:pr is:open` を付けて検索するので, 対象は常にその repo の open PR になる. 最初の `=` で名前とクエリに分けるので, クエリに `=` が入ってもよい. 設定は起動時に読むので, 変えたら起動し直す. 書き間違えたクエリはエラーにならず 0 件になる.
 
+Linear と Devin の連携は任意. 設定が無ければ, Devin 列, 詳細欄の `devin:` 行, `l` と `v` のキー案内, `c` の Linear issue の URL を出さない. `L` (Linear review) と `V` (Devin Review) は設定が無くても使える.
+
 Devin session は Devin API v3 から直近 30 日に更新されたものを取り, PR の URL で照合する. 1 つの PR に複数あれば最新のものを使い, Devin 列に `×n` を付ける.
 
 ## 開発

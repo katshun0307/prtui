@@ -308,8 +308,10 @@ impl AppState {
         self.devin_sessions.iter().find(|s| &s.id == id)
     }
 
-    /// PR に紐づく最新の Devin session と件数
+    /// PR に紐づく最新の Devin session と件数. Devin の設定が無ければ, キャッシュに
+    /// session が残っていても None
     pub fn devin_for(&self, pr: &Pr) -> Option<(&DevinSession, usize)> {
+        self.local.devin.as_ref()?;
         session_for(&self.devin_sessions, &pr.url)
     }
 
