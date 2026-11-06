@@ -68,7 +68,7 @@ worktree の中から起動してもメインの checkout を対象にする. �
 | `O` | Draft を外す |
 | `D` `D` | Draft に戻す |
 | `X` `X` | close する |
-| `R` `R` | `prtui.reviewers` の相手に review を依頼する. レビュー済みの人には再依頼する |
+| `R` | review 依頼の選択画面を開く. `prtui.reviewer-set` の組と, `prtui.reviewers` の人, PR でレビュー済みの人 (コメントだけの人を含む) を並べる. 文字で絞り込み, `Tab` で選び (組はメンバー全員), `Enter` で依頼する. 何も選ばずに `Enter` ならカーソルの項目に依頼する. レビュー済みの人に依頼すると再依頼になる |
 | `l` | ブランチ名かタイトルの issue キーから Linear の issue を開く |
 | `L` | Linear の bot のコメントから Linear review を開く |
 | `v` | Devin session の会話ビューを開く |
@@ -93,8 +93,12 @@ worktree の中から起動してもメインの checkout を対象にする. �
 設定は git config で行う. repo ごとに変えたいものは repo の config に, 共通のものは `--global` に入れる.
 
 ```sh
-# R R で review を依頼する相手. カンマか空白で区切るか, --add で 1 人ずつ足す
+# R の選択画面に並べる review の依頼相手. カンマか空白で区切るか, --add で 1 人ずつ足す
 git config prtui.reviewers "alice,bob"
+
+# R の選択画面でまとめて選べる名前つきの組. "名前=login,login" を --add で 1 組ずつ足す
+git config --add prtui.reviewer-set 'backend=alice,bob,carol'
+git config --add prtui.reviewer-set 'frontend=dave,erin'
 
 # l で開く Linear の workspace
 git config prtui.linear-workspace my-workspace

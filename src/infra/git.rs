@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 
 use crate::domain::devin::DevinConfig;
-use crate::domain::local::{LocalState, parse_reviewers, parse_tabs};
+use crate::domain::local::{LocalState, parse_reviewer_sets, parse_reviewers, parse_tabs};
 use crate::infra::process::run;
 
 /// dir が worktree 内であってもメインの checkout のパスを返す.
@@ -50,6 +50,9 @@ pub fn read_local_state(dir: &Path) -> Result<LocalState> {
     let reviewers = run(dir, "git", &["config", "--get-all", "prtui.reviewers"])
         .map(|s| parse_reviewers(&s))
         .unwrap_or_default();
+    let reviewer_sets = run(dir, "git", &["config", "--get-all", "prtui.reviewer-set"])
+        .map(|s| parse_reviewer_sets(&s))
+        .unwrap_or_default();
     let tabs = run(dir, "git", &["config", "--get-all", "prtui.tab"])
         .map(|s| parse_tabs(&s))
         .unwrap_or_default();
@@ -59,6 +62,7 @@ pub fn read_local_state(dir: &Path) -> Result<LocalState> {
         branches,
         linear_workspace,
         reviewers,
+        reviewer_sets,
         devin: config("prtui.devin-token")
             .zip(config("prtui.devin-org"))
             .map(|(token, org)| DevinConfig { token, org }),

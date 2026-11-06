@@ -11,11 +11,12 @@ use crate::domain::copy::{CopyItem, copy_items};
 use crate::domain::devin::review_url;
 use crate::domain::linear::{issue_url, linear_issue_key};
 use crate::domain::op::PrOp;
-use crate::domain::review::review_targets;
 
 mod chat;
 mod event;
 mod label;
+mod picker;
+mod reviewer;
 
 pub use event::handle_event;
 
@@ -109,6 +110,9 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
     if state.label_menu.is_some() {
         return label::label_key(state, key);
     }
+    if state.reviewer_menu.is_some() {
+        return reviewer::reviewer_key(state, key);
+    }
     if state.tab.is_readonly()
         && let KeyCode::Char(c @ ('u' | 'O' | 'D' | 'X' | 'R' | 'a')) = key.code
     {
@@ -132,7 +136,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('O') => request_state(state, PrOp::Open),
         KeyCode::Char('D') => request_state(state, PrOp::Draft),
         KeyCode::Char('X') => request_state(state, PrOp::Close),
-        KeyCode::Char('R') => request_state(state, PrOp::Review),
+        KeyCode::Char('R') => reviewer::open_reviewers(state),
         KeyCode::Char('a') => label::open_labels(state),
         KeyCode::Char('j') | KeyCode::Down => {
             state.list_mut().move_by(1);
@@ -293,9 +297,8 @@ fn update_branch(state: &mut AppState, n: u64, base: String) -> Vec<Effect> {
     }]
 }
 
-/// open は 1 回で実行し, draft, close, review 依頼は同じキーの 2 回目で実行する.
-/// 既にその状態の PR では何もしない. review 依頼は open (Draft でない) PR に限り,
-/// 相手が未設定か, 全員が既に依頼中なら何もしない.
+/// open は 1 回で実行し, draft, close は同じキーの 2 回目で実行する.
+/// 既にその状態の PR では何もしない.
 fn request_state(state: &mut AppState, op: PrOp) -> Vec<Effect> {
     if state.busy.is_some() {
         return vec![];
@@ -307,43 +310,15 @@ fn request_state(state: &mut AppState, op: PrOp) -> Vec<Effect> {
     match op {
         PrOp::Open if !pr.is_draft => state.info(format!("#{n} は Draft ではない")),
         PrOp::Draft if pr.is_draft => state.info(format!("#{n} は既に Draft")),
-        PrOp::Review if pr.is_draft => {
-            state.error(format!("#{n} は Draft なので review 依頼しない"))
-        }
-        PrOp::Review if state.local.reviewers.is_empty() => state.error(
-            "review 依頼の相手が未設定. git config prtui.reviewers <login>,<login> を設定する"
-                .into(),
-        ),
-        PrOp::Review if review_targets(pr, &state.local.reviewers).is_empty() => state.info(
-            format!("#{n} は {} に依頼済み", state.local.reviewers.join(", ")),
-        ),
         PrOp::Open => return change_state(state, n, op),
-        PrOp::Draft | PrOp::Close | PrOp::Review => state.confirm_op = Some((n, op)),
+        PrOp::Draft | PrOp::Close => state.confirm_op = Some((n, op)),
     }
     vec![]
 }
 
 fn change_state(state: &mut AppState, n: u64, op: PrOp) -> Vec<Effect> {
-    // gh に依頼相手を渡すのは review 依頼のときだけ
-    let targets = match op {
-        PrOp::Review => state
-            .pr(n)
-            .map(|p| review_targets(p, &state.local.reviewers))
-            .unwrap_or_default()
-            .into_iter()
-            .map(String::from)
-            .collect(),
-        PrOp::Open | PrOp::Draft | PrOp::Close => vec![],
-    };
-    state.busy = Some(format!(
-        "#{n} を {}している…",
-        op.phrase(&state.local.reviewers)
-    ));
-    vec![Effect::ChangeState {
-        number: n,
-        op,
-        targets,
-    }]
+    state.busy = Some(format!("#{n} を {}している…", op.phrase()));
+    vec![Effect::ChangeState { number: n, op }]
 }
 
 /// 未コミットの変更の判定は git status の読み直しが要るので runtime で行う
@@ -450,7 +425,7 @@ mod tests {
     use crate::app::event::{Effect, Event};
     use crate::app::state::{AppState, Tab};
     use crate::domain::op::PrOp;
-    use crate::domain::pr::{Pr, Reviewer, ReviewerState};
+    use crate::domain::pr::Pr;
 
     #[test]
     fn update_conflicting_is_error() {
@@ -517,7 +492,6 @@ mod tests {
             vec![Effect::ChangeState {
                 number: 1,
                 op: PrOp::Draft,
-                targets: vec![],
             }]
         );
         assert!(s.confirm_op.is_none());
@@ -546,34 +520,6 @@ mod tests {
         assert!(s.confirm_op.is_none());
         assert!(s.busy.is_none());
         assert_eq!(message(&s), ("#1 の draft を取りやめた", false));
-    }
-
-    #[test]
-    fn review_without_reviewers_is_error() {
-        let mut s = state(vec![pr(1)]);
-        assert!(handle_key(&mut s, key('R')).is_empty());
-        assert!(message(&s).1);
-        assert!(s.confirm_op.is_none());
-    }
-
-    #[test]
-    fn review_targets_are_passed() {
-        let mut p = pr(1);
-        p.reviewers = vec![Reviewer {
-            name: "alice".into(),
-            state: ReviewerState::Requested,
-        }];
-        let mut s = state(vec![p]);
-        s.local.reviewers = vec!["alice".into(), "bob".into()];
-        handle_key(&mut s, key('R'));
-        assert_eq!(
-            handle_key(&mut s, key('R')),
-            vec![Effect::ChangeState {
-                number: 1,
-                op: PrOp::Review,
-                targets: vec!["bob".into()],
-            }]
-        );
     }
 
     #[test]
@@ -644,6 +590,7 @@ mod tests {
                 (&*format!("{c} はレビュータブでは使えない"), true)
             );
             assert!(s.confirm_op.is_none() && s.confirm_update.is_none());
+            assert!(s.label_menu.is_none() && s.reviewer_menu.is_none());
         }
     }
 

@@ -1,8 +1,9 @@
 //! `a` のラベル選択画面. 文字で絞り込み, Tab で付け外しを選び, Enter でまとめて反映する.
 //! 何も選ばずに Enter を押したらカーソルの項目だけを切り替える (fzf と同じ)
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
+use super::picker::{advance, clamp, picker_key};
 use crate::app::event::Effect;
 use crate::app::state::{AppState, LabelMenu};
 use crate::domain::label::{has_label, label_diff, same_label, same_labels};
@@ -29,52 +30,22 @@ pub(super) fn label_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
     let Some(menu) = state.label_menu.as_mut() else {
         return vec![];
     };
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
         KeyCode::Esc => state.label_menu = None,
         KeyCode::Enter => return apply(state),
         KeyCode::Tab => toggle_cursor(state),
-        KeyCode::Up => move_cursor(menu, len, -1),
-        KeyCode::Down => move_cursor(menu, len, 1),
-        KeyCode::Char('p') if ctrl => move_cursor(menu, len, -1),
-        KeyCode::Char('n') if ctrl => move_cursor(menu, len, 1),
-        KeyCode::Char('u') if ctrl => set_query(menu, String::new()),
-        KeyCode::Backspace => {
-            let mut q = menu.query.clone();
-            q.pop();
-            set_query(menu, q);
+        _ => {
+            picker_key(&mut menu.query, &mut menu.list, len, key);
         }
-        KeyCode::Char(c) if !ctrl => {
-            let q = format!("{}{c}", menu.query);
-            set_query(menu, q);
-        }
-        _ => {}
     }
     vec![]
-}
-
-/// 絞り込みを変えたら先頭に戻る
-fn set_query(menu: &mut LabelMenu, query: String) {
-    menu.query = query;
-    menu.list.select(Some(0));
-}
-
-/// 端を越えたら反対の端に回る
-fn move_cursor(menu: &mut LabelMenu, len: usize, delta: isize) {
-    if len == 0 {
-        return;
-    }
-    let cur = menu.list.selected().unwrap_or(0) as isize;
-    menu.list
-        .select(Some((cur + delta).rem_euclid(len as isize) as usize));
 }
 
 /// 選択肢の数が変わったときにカーソルを範囲に収める
 pub(super) fn clamp_cursor(state: &mut AppState) {
     let len = state.label_choices().len();
     if let Some(menu) = state.label_menu.as_mut() {
-        let cur = menu.list.selected().unwrap_or(0);
-        menu.list.select(Some(cur.min(len.saturating_sub(1))));
+        clamp(&mut menu.list, len);
     }
 }
 
@@ -95,8 +66,7 @@ fn toggle_cursor(state: &mut AppState) {
     let cur = menu.list.selected().unwrap_or(0);
     if let Some(l) = choices.get(cur) {
         toggle(&mut menu.chosen, &l.name);
-        menu.list
-            .select(Some((cur + 1).min(choices.len().saturating_sub(1))));
+        advance(&mut menu.list, choices.len());
     }
 }
 

@@ -15,7 +15,13 @@
 - チェックアウト: `gh pr checkout <n>`. 未コミットの変更 (untracked は除く) があれば実行しない. ローカルの同名ブランチが PR と分岐していると gh はブランチを切り替えた後に fast-forward できず失敗する (`Diverging branches` / `Not possible to fast-forward`. `domain/local.rs` の `is_diverged` で判定). このときはエラーの代わりにフッターで y/N を聞き, y なら `gh pr checkout --force <n>` でローカルブランチを PR の最新に reset する (2026-11-02 追加. ユーザーの指定). ローカルだけのコミットは消える (reflog には残る). `--force` でも未コミットの変更があれば実行しない. `--force` でも失敗したらもう聞かずにエラーを出す
 - main の取り込み: `u` キー. stacked PR では update-branch API が base (親のブランチ) を取り込むので, 確認プロンプトとメッセージに base 名を出す. base が main 以外のときは取り込み済みかを判定できないので常に確認を出す. GitHub の update-branch API (`PUT repos/{repo}/pulls/{n}/update-branch`) で remote ブランチに merge commit を作る. ローカルは触らない. `expected_head_sha` に取得時の head oid を渡し, その後に head が動いていれば GitHub が 422 で拒否する. コンフリクトしている PR (`mergeable == CONFLICTING`) では無効にする (ユーザーの指定). 実行前に y/N で確認する
 - PR の状態変更: `O` で open (Draft を外す, `gh pr ready`), `D` を 2 回で draft に戻す (`gh pr ready --undo`), `X` を 2 回で close (`gh pr close`). open は 1 キー, draft と close は 2 キーにする (ユーザーの指定). 1 回目でフッターに確認を出し, 同じキー以外を押すと取りやめる. 既に Draft の PR への draft と, Draft でない PR への open は何もしない. 実行はスレッドで行い, 終わったら再取得する
-- review 依頼: `R` を 2 回で git config `prtui.reviewers` の相手に review を依頼する (`gh pr edit <n> --add-reviewer`). 相手は repo ごとに違うので git config で指定する (ユーザーの指定. 最初は alice と bobBuilder の固定だった). 値はカンマか空白で区切るか, `git config --add` で 1 人ずつ足す (`infra/git.rs` の `read_local_state` が `--get-all` で読む). 未設定なら設定を促すエラーを出す. open (Draft でない) PR に限り, Draft では `#<n> は Draft なので review 依頼しない` を出す. 既に依頼中の人と PR author 自身は除き, レビュー済みの人には再依頼する. 全員が依頼中なら何もしない. 反映待ちは全員が依頼中になるまで. login は大文字小文字を区別せずに比べる (API は `bobBuilder` を返すので, 完全一致だと反映待ちが終わらず 20 秒経つまで一覧が変わらなかった)
+- review 依頼: `R` で選択中の PR の review 依頼の選択画面を一覧の上にポップアップで出し, 選んだ相手に `gh pr edit <n> --add-reviewer a,b` で依頼する (2026-11-06 に選択画面にした. ユーザーの指定でラベルの選択画面と同じ操作. それまでは `RR` で `prtui.reviewers` の全員に依頼していた)
+  - 設定: 個人は git config `prtui.reviewers` (カンマか空白で区切るか, `git config --add` で 1 人ずつ足す). 名前つきの組は `git config --add prtui.reviewer-set '<名前>=<login>,<login>'` で 1 組ずつ足す (`prtui.tab` と同じ書き方. 最初の `=` で分け, メンバーは `prtui.reviewers` と同じ区切り. `=` が無い値と, 名前かメンバーが空の値は捨てる). どちらも `infra/git.rs` の `read_local_state` が `--get-all` で読む. 相手は repo ごとに違うので git config で指定する (最初は alice と bobBuilder の固定だった)
+  - 選択肢 (`domain/review.rs` の `reviewer_choices`): 組を設定の順に先に並べ (名前の前に `◆`, メンバーを DIM で), 次に個人を, 再依頼できるレビュー済みの人 (承認, 変更要求, コメントのみ), 設定にあって PR に居ない人 (`prtui.reviewers`, 組のメンバーの順), 依頼中の人の順に並べる. レビュー済みの人は設定に無くても出すので, コメントだけした人にも再依頼できる (ユーザーの指定). PR author は組からも除き, author しか居ない組は出さない. 個人の後ろに PR での今の状態 (依頼中 yellow, ✓ 承認 green, ✗ 変更要求 red, コメント DIM) を出す
+  - 操作: ラベルの選択画面と同じ. 文字で組の名前, メンバー, login の部分一致 (大文字小文字を無視) で絞り込み, `↑`/`↓` (`Ctrl-p`/`Ctrl-n`) で移動, `Tab` で依頼する相手を選んで次に進む. 組を選ぶとメンバーのうち依頼中でない人をまとめて選び, 全員選ばれていればまとめて外す. `Enter` で選んだ相手に依頼し, 何も選んでいなければカーソルの項目に依頼する. `Esc` で閉じる. 印は 選んだ `[+]`, 組の一部だけ選んだ `[~]`, 依頼中 `[x]`, 選んでいない `[ ]`
+  - 依頼中の人は選べない. 依頼を外す操作は入れていない (誤って外すのを避けるため. ユーザーの依頼にも無い). チームは依頼中としてだけ出る (`Reviewer` が slug しか持たず, 依頼に要る `org/slug` を作れないため)
+  - open (Draft でない) PR に限り, Draft では `#<n> は Draft なので review 依頼しない` を出す. 選択肢が 1 つも無い (設定が無く, レビュー済みの人も居ない) ときは開かずに設定を促すエラーを出す. 開いている間に PR を取り直して依頼中になった人は送らず, 送る相手が居なければ開いたままにする
+  - 反映待ちは依頼した全員が依頼中になるまで (`WatchUntil::Requested`). login は大文字小文字を区別せずに比べる (API は `bobBuilder` を返すので, 完全一致だと反映待ちが終わらず 20 秒経つまで一覧が変わらなかった)
 - Linear を開く: `l` キー. PR の `headRefName` (大文字小文字を無視, 大文字に正規化), 次に `title` から issue キー (`[A-Z][A-Z0-9]*-[0-9]+`) を探し, `https://linear.app/<workspace>/issue/<KEY>` を macOS の `open` で開く. workspace は repo ごとに違うので git config `prtui.linear-workspace` (`infra/git.rs` の `read_local_state` で読む) から取り, 未設定なら設定を促すエラーを出し, フッターの `l` も出さない (2026-11-06 変更). 設定の要らない `L` は残す. キーが無ければ `#<n> に Linear の issue キーが無い` を出す
 - Linear review を開く: `L` キー. review の URL (`https://linear.app/<workspace>/review/<タイトル>-<slugId>`) の slugId は Linear 側の ID で, GitHub の情報からは組み立てられない. Linear の公開 GraphQL API にも GitHub の PR 番号から引くクエリが無い (`diff(id:)` は internal で Linear の ID が要る). そこで Linear の bot (linear-code) が PR に付けるコメントから取る. `gh api --paginate repos/{repo}/issues/{n}/comments` を UI とは別スレッドで呼び, `<!-- linear-review-link -->` の直後の `href` を `?openGuide=true` などの query を外して `open` する. 同じコメントには issue 本文の引用があり, そこに関連する別 PR の review URL が並ぶので, 目印より前は見ない. bot のコメントが無い PR (例: issue に紐付いていない PR) では `#<n> に Linear review のリンクが無い` を出す
 - ラベルの付け外し: `a` で選択中の PR のラベル選択画面を一覧の上にポップアップで出す (2026-11-06 追加. ユーザーの指定で自分タブだけ)
@@ -28,7 +34,7 @@
 - コピー: `c` で選択中の PR のコピー選択画面を一覧の上にポップアップで出し, 続く 1 キーで選んだ値を `pbcopy` でクリップボードに入れる (2026-11-02 追加. ユーザーの指定で `c` をチェックアウトから外し, チェックアウトは `Enter` だけにした). 項目は `b` ブランチ名, `n` `#番号`, `t` タイトル, `u` PR の URL, `m` Markdown リンク `[#番号 タイトル](URL)`, `i` Linear issue キー, `l` Linear issue の URL. 項目は開いたときの PR から `domain/copy.rs` の `copy_items` で作り, 値が作れない項目 (issue キーが無い) は理由を DIM で出し, 押すとエラーにする. `prtui.linear-workspace` が未設定なら `l` の項目ごと出さない (2026-11-06 変更). 項目以外のキーは何もせず閉じる. 両タブで使える
 - キャッシュ: 全件取得に成功するたびに一覧を `$XDG_CACHE_HOME/prtui/<owner>__<name>.json` (未設定なら `~/.cache`) に書く. 起動時はこれを読んで即表示し, 裏で取り直す. ヘッダに `取得 Xm 前` を出し, 取り直しが終わるまで `(キャッシュ)` を付ける. `Pr` の形が変わって読めないキャッシュは捨てる. `--dump` はキャッシュを使わない
 - フッターのメッセージ: 操作の結果 (チェックアウトした, 取得失敗など) はフッターにキー案内の代わりに出し, 次に何かキーを押すと消してキー案内に戻す. 押したキーが新しいメッセージを出せばそれに置き換わる
-- 操作後の更新: `u`, `O`, `DD`, `XX`, `RR`, `a` の後は全件を取り直さず, その PR だけを `fetch_pr` (`repository.pullRequest` に同じ fragment) で取り直して差し替える. 止める条件は `WatchUntil` (`app/event.rs`) のデータで表す. 反映を待つため 2 秒おきに最大 10 回取り直す. 止める条件は, `u` なら head oid が変わる, open / draft なら `isDraft` が変わる, close なら open でなくなる (一覧から消す), `a` ならラベルが狙いの集合になる. 待っている間は一覧のタイトルに `#n を同期中…` を出す. 差し替え後は `arrange` で並びと stack をまとめ直し, 選択中の PR は番号で追う
+- 操作後の更新: `u`, `O`, `DD`, `XX`, `R`, `a` の後は全件を取り直さず, その PR だけを `fetch_pr` (`repository.pullRequest` に同じ fragment) で取り直して差し替える. 止める条件は `WatchUntil` (`app/event.rs`) のデータで表す. 反映を待つため 2 秒おきに最大 10 回取り直す. 止める条件は, `u` なら head oid が変わる, open / draft なら `isDraft` が変わる, close なら open でなくなる (一覧から消す), `a` ならラベルが狙いの集合になる. 待っている間は一覧のタイトルに `#n を同期中…` を出す. 差し替え後は `arrange` で並びと stack をまとめ直し, 選択中の PR は番号で追う
 - Devin session: PR に紐づく Devin session のやり取りを読み, メッセージを送る (2026-10-29 追加. 仕様はユーザーと質疑で決めた).
   - 設定は git config `prtui.devin-token` と `prtui.devin-org` (`org-...`). token は個人, org は組織ごとなので置き場所 (global / repo) は自由にした. 未設定なら session を取らず, Devin 列と詳細欄の `devin:` 行を出さない (キャッシュに session が残っていても出さない). フッターの `v` も出さないが, 押せば設定を促すエラーを出す. 設定の要らない `V` (Devin Review) は残す (2026-11-06 変更. それまでは未設定でも空の Devin 列を出していた)
   - session の特定: Devin API v3 の session 一覧 (`GET /v3/organizations/{org}/sessions`) に PR で絞る引数が無い. そこで `repo_names=<owner/name>` と `updated_after=30 日前` で取り (200 件 × 最大 5 ページ), 各 session の `pull_requests[].pr_url` を PR の URL と照合する (末尾 `/` と大文字小文字は無視). PR 本文の Devin のリンクから取る案は, 人が作った PR に後から Devin を入れた場合に拾えないので採らなかった. 1 つの PR に複数あれば `updated_at` が最新の 1 つを使う. 他人の session でも PR が一致すれば出す
@@ -44,7 +50,7 @@
   - 自分の立場 (`MyReview`): 依頼中の検索に当たれば requested. `latestReviews` から自分 (大文字小文字を無視) の最新のレビューを取る. 依頼中かつレビュー済みなら「再依頼」. `reviewRequests` に自分の login が無ければチーム経由とみなし, PR に依頼されているチームのうち自分の所属チームの slug を詳細欄に `依頼: <team> 経由` で出す. 所属チームは `QUERY_REVIEW` で `repositoryOwner(login:<owner>)` が Organization のとき `teams(role:MEMBER)` と `teams(role:ADMIN)` を取る (maintainer が MEMBER に入るか不明なので両方). 1 つも当たらなければ (owner が User, 子チーム経由で親チームに依頼された, など) 依頼されている全チームに戻す. `read:org` の無いトークンでこのクエリが失敗するかは確かめていない
   - 並び: 依頼中 (再依頼を含む) を先に, その中は依頼を受けた時刻の古い順 (古い依頼から片付けるため. ユーザーの指定). 依頼時刻が分からなければ更新日時で代える. レビュー済みはその後ろに更新日時の降順. stack はまとめない
   - 依頼時刻: `reviewRequests` に時刻が無いので, 依頼中側の alias だけ `fragment_requested.graphql` で `timelineItems(last:50, itemTypes:[REVIEW_REQUESTED_EVENT])` を取る. 直接の依頼なら自分宛ての最新の event (再依頼なら最後の依頼) を `MyReview::requested_at` にする. チーム経由なら, 今依頼されているチームごとの最新の event のうち最も古いものを使う. 所属チームで絞れず全チームに戻ったときに, 後から関係ないチームが依頼されても待ち時間を短く見せないため (サブエージェントのレビューの指摘). 依頼時刻が同じなら番号の昇順. 一覧の「依頼」列に経過時間を yellow で出す
-  - 操作: `Enter`, `c`, `d`, `o`, `l`, `L`, `v`, `t`, `r` は使える. 他人の PR を変える `u` / `O` / `DD` / `XX` / `RR` / `a` は無効にし, `<key> はレビュータブでは使えない` を出す (ユーザーの指定)
+  - 操作: `Enter`, `c`, `d`, `o`, `l`, `L`, `v`, `t`, `r` は使える. 他人の PR を変える `u` / `O` / `DD` / `XX` / `R` / `a` は無効にし, `<key> はレビュータブでは使えない` を出す (ユーザーの指定)
   - Devin Review: `V` で `https://app.devin.ai/review/<owner>/<name>/pull/<n>` を `open` で開く. repo と PR 番号だけで組み立てるので, Devin の設定 (token, org) も API も要らない. ユーザーの指定でレビュータブだけにした. 自分タブでは何もしない. 追加のタブはレビュータブに合わせて使えるようにした
 - 追加のタブ: git config `prtui.tab` に書いた検索クエリで, 自分タブとレビュータブの後ろにタブを足す (2026-11-05 追加. 仕様はユーザーと質疑で決めた. 例はラベル `マージ予定` の open PR の一覧)
   - 設定: `git config --add prtui.tab '<名前>=<検索クエリ>'` で 1 タブずつ足す (`prtui.reviewers` と同じ複数値のキー. 書き方はユーザーの指定で git config). 最初の `=` で名前とクエリに分ける. `=` が無い値と, 名前かクエリが空の値は捨てる. タブは `--get-all` の順 (書いた順) に並べる. タブの並びは起動時の設定で決め, 実行中に設定を変えても再起動まで反映しない. タブごとのセクション (`[prtui "tab.<名前>"]`) にする案は, 今の用途では書く量が増えるだけなので採らなかった
@@ -52,7 +58,7 @@
   - 取得: タブごとに別スレッドで, 自分タブと同じタイミング (起動時, 5 分ごと, `r`). 失敗はそのタブの一覧のタイトルに赤で出す. キャッシュは同じファイルの `custom` にクエリと取得時刻と一緒に入れ, 起動時はクエリが今の設定と一致するタブだけ戻す
   - 並び: 更新日時の降順 (`arrange_flat`). 他人の PR が混ざるので stack はまとめない
   - 切り替え: `Tab` / `Shift-Tab` で順に回し (端で反対の端に回る), `1`〜`9` で直接選ぶ. 10 個目以降は `Tab` でだけ選べる. タブ欄はヘッダの下の独立した行に出す (ヘッダの 1 行目に並べるとブランチ名が長いときに 3 つ目以降が画面外に切れたため)
-  - 操作: レビュータブと同じ (ユーザーの指定). `u` / `O` / `DD` / `XX` / `RR` / `a` は無効にし `<key> は<名前>タブでは使えない` を出す. `V` (Devin Review) は使える
+  - 操作: レビュータブと同じ (ユーザーの指定). `u` / `O` / `DD` / `XX` / `R` / `a` は無効にし `<key> は<名前>タブでは使えない` を出す. `V` (Devin Review) は使える
   - 列: `# 状態 CI 未解決 main 差分 Reviewer Author Assignee Local Devin 更新 タイトル`. マージの判断に使うことが多いので main を出し, 自分と他人の PR が混ざるので Author と Assignee を出す (Assignee はユーザーの指定). Assignee は先頭の 1 人と `+n` (DIM). Stack は stack をまとめないので, レビュータブの自分と依頼はこのクエリで取らないので出さない. ラベルは絞り込みに使うことが多く重複するので一覧には出さない (詳細欄の `labels:` にはある). Review 列は無い (下の「一覧の列」を参照)
 - 実装: Rust (edition 2024), ratatui 0.30 (crossterm は `ratatui::crossterm` の re-export を使う), serde, anyhow, chrono. GitHub と git は `gh` と `git` コマンドを `std::process::Command` で呼ぶ. 非同期 runtime は使わず, 時間のかかる処理はスレッド + mpsc で UI をブロックしない. dev-dependencies は insta (描画と `--dump` の snapshot), pretty_assertions, tempfile, apollo-compiler (クエリを schema に照らして検証)
 
@@ -64,20 +70,20 @@
 |---|---|
 | `src/main.rs` | 引数処理 (`-C`, `--dump`), 端末初期化, イベントループ, 外部コマンド実行時の TUI 一時停止 |
 | `src/dump.rs` | `--dump` のテキスト出力. 取得は `run`, 文字列の組み立ては純粋関数 (`header`, `mine`, `review`, `custom`) で, snapshot は `src/snapshots/` |
-| `src/domain/` | 純粋な型と関数. `pr.rs` (`Pr`, `MyReview`), `stack.rs` (`arrange`, `arrange_flat`, `group_stacks`), `review.rs` (`review_targets`, `arrange_reviews`), `linear.rs` (issue キーと review URL の抽出), `copy.rs` (`copy_items`), `local.rs` (`LocalState`, `parse_reviewers`, `TabQuery`, `parse_tabs`), `op.rs` (`PrOp`), `label.rs` (`Label`, `label_choices`, `label_diff`), `devin.rs` (Devin の型と `session_for`, `review_url`), `cache.rs` (キャッシュの型 `Cache`, `CustomCache`) |
+| `src/domain/` | 純粋な型と関数. `pr.rs` (`Pr`, `MyReview`), `stack.rs` (`arrange`, `arrange_flat`, `group_stacks`), `review.rs` (`review_targets`, `reviewer_choices`, `arrange_reviews`), `linear.rs` (issue キーと review URL の抽出), `copy.rs` (`copy_items`), `local.rs` (`LocalState`, `parse_reviewers`, `ReviewerSet`, `parse_reviewer_sets`, `TabQuery`, `parse_tabs`), `op.rs` (`PrOp`), `label.rs` (`Label`, `label_choices`, `label_diff`), `devin.rs` (Devin の型と `session_for`, `review_url`), `cache.rs` (キャッシュの型 `Cache`, `CustomCache`) |
 | `src/infra/process.rs` | コマンド実行ヘルパ `run`, `open_url` |
 | `src/infra/git.rs` | メイン worktree の解決 `main_worktree`, `read_local_state` (現在ブランチ, dirty, refs/heads の oid, git config) |
-| `src/infra/gh.rs` | gh コマンド. 全件取得 `fetch_prs`, レビュータブの `fetch_reviews`, 追加のタブの `fetch_custom`, 1 件取得 `fetch_pr`, `update_branch`, `checkout`, `change_state`, `fetch_labels`, `edit_labels`, `view_web`, `linear_review_url`. 引数の組み立ては `*_args` の純粋関数にしてテストする |
+| `src/infra/gh.rs` | gh コマンド. 全件取得 `fetch_prs`, レビュータブの `fetch_reviews`, 追加のタブの `fetch_custom`, 1 件取得 `fetch_pr`, `update_branch`, `checkout`, `change_state`, `request_reviews`, `fetch_labels`, `edit_labels`, `view_web`, `linear_review_url`. 引数の組み立ては `*_args` の純粋関数にしてテストする |
 | `src/infra/graphql/` | `*.graphql` (クエリと fragment の本文), `schema.graphql` (GitHub の公開 schema. `task schema` で取り直す), `query.rs` (`.graphql` を `include_str!` して送る文書を組み立てる. schema に照らす検証テストもここ), `raw.rs` (`Raw*` 型), `mod.rs` (`Pr` への変換と JSON の解析 `parse_search` / `parse_review` / `parse_custom` / `parse_one`) |
 | `src/infra/devin.rs` | Devin API v3 (`fetch_sessions`, `fetch_messages`, `send_message`) を curl で呼ぶ. JSON の解析 `parse_*` |
 | `src/infra/cache.rs` | PR 一覧と Devin session 一覧のディスクキャッシュの置き場所と読み書き |
-| `src/app/state.rs` | 全状態 `AppState`, タブ `Tab` とタブごとの一覧 `PrList`, 追加のタブ `CustomTab`, 会話ビューの `ChatView`, ラベル選択画面の `LabelMenu` |
+| `src/app/state.rs` | 全状態 `AppState`, タブ `Tab` とタブごとの一覧 `PrList`, 追加のタブ `CustomTab`, 会話ビューの `ChatView`, ラベル選択画面の `LabelMenu`, review 依頼の選択画面の `ReviewerMenu` |
 | `src/app/event.rs` | `Event` (スレッドの結果), `Effect` (副作用の要求), `Action` (main への指示), `WatchUntil` |
-| `src/app/update/` | キー操作, イベント処理, 時間の遷移 (`tick`). `AppState` を更新して `Vec<Effect>` を返す純粋関数. `mod.rs` (`refresh`, `tick`, `handle_key` と一覧の操作), `event.rs` (`handle_event`), `chat.rs` (会話ビューのキー), `label.rs` (ラベル選択画面のキー) |
+| `src/app/update/` | キー操作, イベント処理, 時間の遷移 (`tick`). `AppState` を更新して `Vec<Effect>` を返す純粋関数. `mod.rs` (`refresh`, `tick`, `handle_key` と一覧の操作), `event.rs` (`handle_event`), `chat.rs` (会話ビューのキー), `label.rs` (ラベル選択画面のキー), `reviewer.rs` (review 依頼の選択画面のキー), `picker.rs` (2 つの選択画面で共通の絞り込みとカーソル移動) |
 | `src/app/ports.rs` | runtime が外とやりとりする trait (`Github`, `Git`, `Devin`, `CacheStore`, `Desktop`) とその束 `Ports`, 待ち時間の `RuntimeConfig`. テスト用の fake もここ |
 | `src/app/adapters.rs` | ports の実装. infra の関数に委譲する. `real_ports` |
 | `src/app/runtime.rs` | `App`. Effect を実行し, スレッドの起動と ports の呼び出しをここに閉じる |
-| `src/ui/` | 描画. `mod.rs` (ヘッダ, フッタ, 配色), `table.rs` (一覧. 列はタブごとの `Column` の表), `detail.rs` (詳細欄), `chat.rs` (会話ビュー), `copy.rs` と `label.rs` (ポップアップ), `format.rs`. snapshot は `src/ui/snapshots/` |
+| `src/ui/` | 描画. `mod.rs` (ヘッダ, フッタ, 配色), `table.rs` (一覧. 列はタブごとの `Column` の表), `detail.rs` (詳細欄), `chat.rs` (会話ビュー), `copy.rs`, `label.rs`, `reviewer.rs` (ポップアップ. 配置は `mod.rs` の `popup_area`), `format.rs`. snapshot は `src/ui/snapshots/` |
 
 ### レイヤー化した理由
 
@@ -150,7 +156,11 @@ runtime にも checkout の dirty チェック, watch の打ち切り, キャッ
 - 2026-11-06: `a` (ラベルの付け外し) を足した. clippy 0 件, fmt 通過, `cargo test` 180 件通過. 検証用 repo の tmux で選択画面の表示 (付いているものが先, ラベルの色, 説明), 英字と日本語での絞り込み, `Tab` で `[+]` が付くこと, `Ctrl-u`, `Esc` で何もせず閉じることを確認. 詳細欄の `●` が GitHub のラベルの色 (refactoring の `#ED3FE9` など) で出ることを tmux のエスケープコードで確認 (`cargo test` 181 件). 実際の `gh pr edit` は共有 repo の PR を変えるので実行していない
 - 2026-11-06: Devin と Linear の設定が無いとき, 空になるだけの Devin 列, 詳細欄の `devin:` 行, フッターの `v` と `l`, `c` の Linear issue の URL を出さないようにした (ユーザーの指定). `cargo test` 182 件通過. 未設定の画面は snapshot `without_devin_and_linear` で固定した
 
+- 2026-11-06: `RR` を review 依頼の選択画面 (`R`) にし, 名前つきの組 (`prtui.reviewer-set`) と, コメントだけした人への再依頼を足した (ユーザーの指定). `PrOp::Review` を外して `Effect::RequestReviews` / `Event::RequestedReviews` に分けた. clippy 0 件, fmt 通過, `cargo test` 202 件通過. 描画は snapshot `reviewer_menu` で固定した
+
 ## 未確認
+
+- `R` の選択画面から実際に依頼し, 再依頼で Reviewer 列が依頼中に戻ること. `gh pr edit --add-reviewer` は前の `RR` と同じ argv で, Effect から反映待ちまでは fake でだけ確かめた
 
 - `a` の `Enter` で実際にラベルが付け外しされ, `WatchUntil::Labels` の反映待ちが止まること. `gh pr edit` の argv は単体テストで, Effect から反映待ちまでは fake でだけ確かめた
 

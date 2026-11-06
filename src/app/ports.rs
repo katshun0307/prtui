@@ -25,7 +25,8 @@ pub trait Github: Send + Sync + 'static {
     fn fetch_pr(&self, number: u64) -> Result<Option<Pr>>;
     fn update_branch(&self, number: u64, head_oid: &str) -> Result<String>;
     fn checkout(&self, number: u64, force: bool) -> Result<String>;
-    fn change_state(&self, number: u64, op: PrOp, targets: &[String]) -> Result<String>;
+    fn change_state(&self, number: u64, op: PrOp) -> Result<String>;
+    fn request_reviews(&self, number: u64, targets: &[String]) -> Result<String>;
     fn view_web(&self, number: u64) -> Result<()>;
     /// repo のラベル全件
     fn fetch_labels(&self) -> Result<Vec<Label>>;
@@ -120,7 +121,7 @@ pub(crate) mod fake {
         pub custom: Mutex<Result<Vec<Pr>, String>>,
         /// `fetch_pr` が順に返す結果. 最後の 1 つは使い切らずに返し続ける. 空なら Ok(None)
         pub pr: Mutex<VecDeque<Result<Option<Pr>, String>>>,
-        /// update_branch, checkout, change_state, view_web, edit_labels の結果
+        /// update_branch, checkout, change_state, request_reviews, view_web, edit_labels の結果
         pub op: Mutex<Result<String, String>>,
         pub linear: Mutex<Result<Option<String>, String>>,
         pub labels: Mutex<Result<Vec<Label>, String>>,
@@ -188,11 +189,13 @@ pub(crate) mod fake {
             cloned(&self.op)
         }
 
-        fn change_state(&self, number: u64, op: PrOp, targets: &[String]) -> Result<String> {
-            self.record(format!(
-                "change_state {number} {op:?} {}",
-                targets.join(",")
-            ));
+        fn change_state(&self, number: u64, op: PrOp) -> Result<String> {
+            self.record(format!("change_state {number} {op:?}"));
+            cloned(&self.op)
+        }
+
+        fn request_reviews(&self, number: u64, targets: &[String]) -> Result<String> {
+            self.record(format!("request_reviews {number} {}", targets.join(",")));
             cloned(&self.op)
         }
 

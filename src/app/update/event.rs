@@ -4,6 +4,7 @@ use chrono::Utc;
 
 use super::chat::send;
 use super::label::{clamp_cursor, diff_text};
+use super::reviewer;
 use crate::app::event::{Effect, Event, WatchUntil};
 use crate::app::state::{AppState, PrList};
 use crate::domain::label::apply_diff;
@@ -67,6 +68,7 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
                         .collect();
                     prs.extend(pr);
                     state.mine.replace(arrange(prs));
+                    reviewer::clamp_cursor(state);
                     vec![Effect::SaveCache]
                 }
                 Err(e) => {
@@ -115,12 +117,11 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
             state.busy = None;
             match res {
                 Ok(_) => {
-                    state.info(format!("#{n} を {}した", op.phrase(&state.local.reviewers)));
+                    state.info(format!("#{n} を {}した", op.phrase()));
                     let until = match op {
                         PrOp::Open => WatchUntil::NotDraft,
                         PrOp::Draft => WatchUntil::IsDraft,
                         PrOp::Close => WatchUntil::Gone,
-                        PrOp::Review => WatchUntil::Requested(state.local.reviewers.clone()),
                     };
                     vec![Effect::Watch { number: n, until }]
                 }
@@ -226,6 +227,32 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
                 }
             }
             vec![]
+        }
+        Event::RequestedReviews {
+            number: n,
+            targets,
+            res,
+        } => {
+            state.busy = None;
+            match res {
+                Ok(_) => {
+                    state.info(format!(
+                        "#{n} に {} の review を依頼した",
+                        targets.join(", ")
+                    ));
+                    vec![Effect::Watch {
+                        number: n,
+                        until: WatchUntil::Requested(targets),
+                    }]
+                }
+                Err(e) => {
+                    state.error(format!("#{n} の review 依頼失敗: {e}"));
+                    vec![Effect::Watch {
+                        number: n,
+                        until: WatchUntil::Immediately,
+                    }]
+                }
+            }
         }
         Event::EditedLabels {
             number: n,

@@ -1,5 +1,5 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 
@@ -12,6 +12,7 @@ mod copy;
 mod detail;
 pub mod format;
 mod label;
+mod reviewer;
 mod table;
 
 use chat::draw_chat;
@@ -19,6 +20,7 @@ use copy::draw_copy_menu;
 use detail::detail_view;
 use format::ago;
 use label::draw_label_menu;
+use reviewer::draw_reviewer_menu;
 use table::draw_table;
 
 /// 配色の意味
@@ -70,6 +72,19 @@ pub(super) fn label_dot(l: &Label) -> Span<'static> {
     }
 }
 
+/// 一覧の上に出すポップアップの領域. 幅は最大 80 桁, 高さは枠 2 行と rows 行で画面に収める
+pub(super) fn popup_area(area: Rect, rows: u16) -> Rect {
+    let width = area.width.saturating_sub(4).min(80);
+    let height = (rows + 2).min(area.height.saturating_sub(2)).max(5);
+    let [popup] = Layout::horizontal([Constraint::Length(width)])
+        .flex(Flex::Center)
+        .areas(area);
+    let [popup] = Layout::vertical([Constraint::Length(height)])
+        .flex(Flex::Center)
+        .areas(popup);
+    popup
+}
+
 pub fn draw(f: &mut Frame, state: &mut AppState) {
     if state.chat.is_some() {
         draw_chat(f, state);
@@ -95,6 +110,9 @@ pub fn draw(f: &mut Frame, state: &mut AppState) {
     }
     if state.label_menu.is_some() {
         draw_label_menu(f, state, f.area());
+    }
+    if state.reviewer_menu.is_some() {
+        draw_reviewer_menu(f, state, f.area());
     }
 }
 
@@ -166,7 +184,7 @@ fn footer_line(state: &AppState) -> Line<'static> {
         return Line::from(
             Span::raw(format!(
                 " #{n} を {}する? もう一度 {} で実行, 他のキーで取りやめ",
-                op.phrase(&state.local.reviewers),
+                op.phrase(),
                 op.key()
             ))
             .yellow()
@@ -189,6 +207,15 @@ fn footer_line(state: &AppState) -> Line<'static> {
             .bold(),
         );
     }
+    if state.reviewer_menu.is_some() {
+        return Line::from(
+            Span::raw(
+                " 文字で絞り込み  ↑↓ 移動  Tab 依頼する相手を選ぶ (組はメンバー全員)  Enter 依頼 (選んでいなければカーソルの項目)  Esc 閉じる",
+            )
+            .yellow()
+            .bold(),
+        );
+    }
     if let Some(m) = &state.message {
         let span = Span::raw(format!(" {}", m.text));
         return Line::from(if m.is_error { span.red() } else { span.green() });
@@ -200,7 +227,7 @@ fn footer_line(state: &AppState) -> Line<'static> {
         ("O", "open"),
         ("DD", "draft"),
         ("XX", "close"),
-        ("RR", "review 依頼"),
+        ("R", "review 依頼"),
         ("a", "ラベル"),
         ("d", "diff"),
         ("o", "ブラウザ"),
@@ -257,12 +284,12 @@ mod tests {
     use ratatui::buffer::Cell;
 
     use super::*;
-    use crate::app::LabelMenu;
     use crate::app::Tab;
+    use crate::app::{LabelMenu, ReviewerMenu};
     use crate::domain::copy::copy_items;
     use crate::domain::devin::DevinConfig;
     use crate::domain::label::Label;
-    use crate::domain::local::{LocalState, TabQuery};
+    use crate::domain::local::{LocalState, ReviewerSet, TabQuery};
     use crate::domain::op::PrOp;
     use crate::domain::pr::{Check, CheckState, MyReview, Pr, Reviewer, ReviewerState, Stack};
 
@@ -343,6 +370,10 @@ mod tests {
             ]
             .into(),
             reviewers: vec!["alice".into(), "bob".into()],
+            reviewer_sets: vec![ReviewerSet {
+                name: "backend".into(),
+                members: vec!["alice".into(), "carol".into(), "erin".into()],
+            }],
             tabs: vec![TabQuery {
                 name: "マージ予定".into(),
                 query: "label:merge".into(),
@@ -625,13 +656,13 @@ mod tests {
         lines.push(footer(&mut s));
         s.error("チェックアウト失敗: 未コミットの変更がある".into());
         lines.push(footer(&mut s));
+        s.reviewer_menu = Some(ReviewerMenu::new(1));
+        lines.push(footer(&mut s));
         s.label_menu = Some(LabelMenu::new(1, vec![]));
         lines.push(footer(&mut s));
         s.copy_menu = Some(vec![]);
         lines.push(footer(&mut s));
         s.confirm_op = Some((3, PrOp::Close));
-        lines.push(footer(&mut s));
-        s.confirm_op = Some((1, PrOp::Review));
         lines.push(footer(&mut s));
         s.confirm_force_checkout = Some((2, "feat-b".into()));
         lines.push(footer(&mut s));
@@ -674,6 +705,37 @@ mod tests {
             .filter(|l| at(l, 0..2) >= 12 && at(l, 3..6) >= 41)
             .collect();
         insta::assert_snapshot!("label_menu_styles", popup.join("\n"));
+    }
+
+    /// #1 は alice が承認, bob がコメントのみ, dave が依頼中. 組 backend の carol と, bob を選んだところ
+    #[test]
+    fn reviewer_menu() {
+        let mut s = state();
+        s.mine.prs[0]
+            .reviewers
+            .push(reviewer("dave", ReviewerState::Requested));
+        let mut menu = ReviewerMenu::new(1);
+        menu.chosen = vec!["carol".into(), "bob".into()];
+        menu.list.select(Some(2));
+        s.reviewer_menu = Some(menu);
+        let term = terminal(&mut s);
+        insta::assert_snapshot!(screen(&term));
+        let styles = styles(&term);
+        let at = |l: &str, r: std::ops::Range<usize>| l[r].trim().parse::<u16>().unwrap_or(0);
+        let popup: Vec<&str> = styles
+            .lines()
+            .filter(|l| at(l, 0..2) >= 12 && at(l, 3..6) >= 41)
+            .collect();
+        insta::assert_snapshot!("reviewer_menu_styles", popup.join("\n"));
+    }
+
+    #[test]
+    fn reviewer_menu_no_match() {
+        let mut s = state();
+        let mut menu = ReviewerMenu::new(1);
+        menu.query = "zz".into();
+        s.reviewer_menu = Some(menu);
+        insta::assert_snapshot!(screen(&terminal(&mut s)));
     }
 
     /// 詳細欄のラベルの前にラベルの色の ● を出す. 色の無いラベルは DIM の ○
