@@ -12,6 +12,7 @@ use crate::domain::conversation::{Conversation, ReviewAction};
 use crate::domain::devin::{DevinConfig, DevinMessage, DevinSession};
 use crate::domain::label::Label;
 use crate::domain::local::LocalState;
+use crate::domain::merge::{MergeMethod, MergeOutcome, MergeSettings};
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
 
@@ -32,6 +33,10 @@ pub trait Github: Send + Sync + 'static {
     fn update_branch(&self, number: u64, head_oid: &str) -> Result<String>;
     fn checkout(&self, number: u64, force: bool) -> Result<String>;
     fn change_state(&self, number: u64, op: PrOp) -> Result<String>;
+    /// repo で許可されたマージ方法
+    fn fetch_merge_settings(&self) -> Result<MergeSettings>;
+    /// マージを頼み, 終わるまで待つ. head が head_oid から動いていればマージせずにエラーにする
+    fn merge(&self, number: u64, method: MergeMethod, head_oid: &str) -> Result<MergeOutcome>;
     fn request_reviews(&self, number: u64, targets: &[String]) -> Result<String>;
     fn view_web(&self, number: u64) -> Result<()>;
     /// repo のラベル全件
@@ -113,6 +118,7 @@ pub(crate) mod fake {
     use crate::domain::devin::{DevinConfig, DevinMessage, DevinSession};
     use crate::domain::label::Label;
     use crate::domain::local::LocalState;
+    use crate::domain::merge::{MergeMethod, MergeOutcome, MergeSettings};
     use crate::domain::op::PrOp;
     use crate::domain::pr::Pr;
 
@@ -134,6 +140,8 @@ pub(crate) mod fake {
         pub linear: Mutex<Result<Option<String>, String>>,
         pub labels: Mutex<Result<Vec<Label>, String>>,
         pub conversation: Mutex<Result<Conversation, String>>,
+        pub merge_settings: Mutex<Result<MergeSettings, String>>,
+        pub merge: Mutex<Result<MergeOutcome, String>>,
     }
 
     impl Default for FakeGh {
@@ -148,6 +156,11 @@ pub(crate) mod fake {
                 linear: Mutex::new(Ok(None)),
                 labels: Mutex::new(Ok(vec![])),
                 conversation: Mutex::new(Err("説明とコメントが未設定".into())),
+                merge_settings: Mutex::new(Ok(MergeSettings::new(
+                    MergeMethod::ALL.to_vec(),
+                    Some(MergeMethod::Squash),
+                ))),
+                merge: Mutex::new(Ok(MergeOutcome::Merged)),
             }
         }
     }
@@ -217,6 +230,16 @@ pub(crate) mod fake {
         fn change_state(&self, number: u64, op: PrOp) -> Result<String> {
             self.record(format!("change_state {number} {op:?}"));
             cloned(&self.op)
+        }
+
+        fn fetch_merge_settings(&self) -> Result<MergeSettings> {
+            self.record("fetch_merge_settings".into());
+            cloned(&self.merge_settings)
+        }
+
+        fn merge(&self, number: u64, method: MergeMethod, head_oid: &str) -> Result<MergeOutcome> {
+            self.record(format!("merge {number} {method:?} {head_oid}"));
+            cloned(&self.merge)
         }
 
         fn request_reviews(&self, number: u64, targets: &[String]) -> Result<String> {

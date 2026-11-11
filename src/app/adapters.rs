@@ -12,6 +12,7 @@ use crate::domain::conversation::{Conversation, ReviewAction};
 use crate::domain::devin::{DevinConfig, DevinMessage, DevinSession};
 use crate::domain::label::Label;
 use crate::domain::local::LocalState;
+use crate::domain::merge::{MergeMethod, MergeOutcome, MergeSettings};
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
 use crate::infra::{cache, devin, gh, git, process};
@@ -60,6 +61,14 @@ impl Github for GhCli {
 
     fn change_state(&self, number: u64, op: PrOp) -> Result<String> {
         gh::change_state(&self.dir, number, op)
+    }
+
+    fn fetch_merge_settings(&self) -> Result<MergeSettings> {
+        gh::fetch_merge_settings(&self.dir, &self.repo)
+    }
+
+    fn merge(&self, number: u64, method: MergeMethod, head_oid: &str) -> Result<MergeOutcome> {
+        gh::merge(&self.dir, &self.repo, number, method, head_oid)
     }
 
     fn request_reviews(&self, number: u64, targets: &[String]) -> Result<String> {

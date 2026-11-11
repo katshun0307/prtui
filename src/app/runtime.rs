@@ -138,6 +138,18 @@ impl App {
                 }),
                 Effect::ChangeState { number, op } => self
                     .spawn(move |p| Event::ChangedState(number, op, p.gh.change_state(number, op))),
+                Effect::FetchMergeSettings => {
+                    self.spawn(|p| Event::FetchedMergeSettings(p.gh.fetch_merge_settings()))
+                }
+                Effect::Merge {
+                    number,
+                    method,
+                    head_oid,
+                } => self.spawn(move |p| Event::Merged {
+                    number,
+                    method,
+                    res: p.gh.merge(number, method, &head_oid),
+                }),
                 Effect::RequestReviews { number, targets } => self.spawn(move |p| {
                     let res = p.gh.request_reviews(number, &targets);
                     Event::RequestedReviews {
@@ -396,6 +408,7 @@ mod tests {
     use crate::domain::cache::{Cache, CustomCache};
     use crate::domain::label::Label;
     use crate::domain::local::{LocalState, TabQuery};
+    use crate::domain::merge::MergeMethod;
     use crate::domain::pr::Pr;
 
     fn pr(n: u64) -> Pr {
@@ -567,6 +580,36 @@ mod tests {
             message(&a.state),
             ("#1 のラベルを変えた: +docs -bug", false)
         );
+    }
+
+    #[test]
+    fn merge_then_watch_until_gone() {
+        let f = Fakes::default();
+        let mut a = app(&f);
+        a.state.mine.prs = vec![pr(1), pr(2)];
+        f.gh.pr.lock().unwrap().extend([Ok(Some(pr(1))), Ok(None)]);
+        a.perform(vec![Effect::Merge {
+            number: 1,
+            method: MergeMethod::Squash,
+            head_oid: "oid1".into(),
+        }]);
+        // Merged と, それが出した Watch の Reloaded と全件取得の Fetched
+        *f.gh.prs.lock().unwrap() = Ok(vec![pr(2)]);
+        a.pump_blocking(3);
+        let mut calls = f.gh.calls();
+        // Watch と全件取得は別スレッドなので順番は決まらない
+        calls.sort();
+        assert_eq!(
+            calls,
+            [
+                "fetch_pr 1",
+                "fetch_pr 1",
+                "fetch_prs",
+                "merge 1 Squash oid1"
+            ]
+        );
+        assert_eq!(numbers(&a.state.mine.prs), [2]);
+        assert_eq!(message(&a.state), ("#1 を squash でマージした", false));
     }
 
     #[test]

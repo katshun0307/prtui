@@ -27,6 +27,8 @@ pub(crate) fn parse_search(json: &str) -> Result<Vec<Pr>> {
         .nodes
         .into_iter()
         .chain(resp.data.assignee.nodes)
+        // search の索引は遅れるので, マージした直後の PR が is:open に当たることがある. 状態は node の今の値で見る
+        .filter(|r| r.state == "OPEN")
         .filter_map(convert)
         .filter(|p| seen.insert(p.number))
         .collect())
@@ -505,12 +507,13 @@ mod tests {
             ]},
             "assignee":{"nodes":[
                 {"number":2,"title":"b (assignee)","state":"OPEN"},
-                {"number":3,"title":"c","state":"OPEN"}
+                {"number":3,"title":"c","state":"OPEN"},
+                {"number":4,"title":"d","state":"MERGED"}
             ]}
         }}"#;
         let prs = parse_search(json).unwrap();
         let got: Vec<(u64, &str)> = prs.iter().map(|p| (p.number, p.title.as_str())).collect();
-        // author 側が先に残り, 並べ替えはしない
+        // author 側が先に残り, 並べ替えはしない. 索引が遅れて当たった MERGED は捨てる
         assert_eq!(got, vec![(1, "a"), (2, "b"), (3, "c")]);
     }
 
