@@ -10,6 +10,7 @@ use crate::domain::copy::CopyItem;
 use crate::domain::devin::{DevinMessage, DevinSession, session_for};
 use crate::domain::label::{Label, label_choices};
 use crate::domain::local::LocalState;
+use crate::domain::merge::MergeSettings;
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
 use crate::domain::review::{ReviewerChoice, reviewer_choices};
@@ -180,6 +181,14 @@ impl ReviewerMenu {
     }
 }
 
+/// `M` で開くマージの確認画面. 自分タブの Draft でもコンフリクトしてもいない PR だけが対象
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeMenu {
+    pub number: u64,
+    /// 開いたときの head. 確認画面で見た後に push された変更をマージしないよう, マージ API の `sha` に渡す
+    pub head_oid: String,
+}
+
 /// 一覧のタブ
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
@@ -193,7 +202,7 @@ pub enum Tab {
 }
 
 impl Tab {
-    /// 他人の PR が混ざるタブ. PR を変える操作 (u, O, DD, XX, R, a) は自分タブでしか使わない
+    /// 他人の PR が混ざるタブ. PR を変える操作 (u, O, DD, XX, R, a, M) は自分タブでしか使わない
     pub fn is_readonly(self) -> bool {
         self != Tab::Mine
     }
@@ -273,7 +282,7 @@ pub struct AppState {
     pub dir: PathBuf,
     pub repo: String,
     pub tab: Tab,
-    /// 自分タブ. 操作 (u, O, DD, XX, R, a) と 1 件の取り直しはこちらだけが対象
+    /// 自分タブ. 操作 (u, O, DD, XX, R, a, M) と 1 件の取り直しはこちらだけが対象
     pub mine: PrList,
     pub review: PrList,
     /// 追加のタブ. 自分タブとレビュータブの後ろに並べる
@@ -297,6 +306,11 @@ pub struct AppState {
     /// repo のラベル. 選択画面を開くたびに取り直す
     pub repo_labels: Vec<Label>,
     pub labels_loading: bool,
+    /// `M` で開いたマージの確認画面
+    pub merge_menu: Option<MergeMenu>,
+    /// repo で許可されたマージ方法. 確認画面を初めて開いたときに取り, 以後は取り直さない
+    pub merge_settings: Option<MergeSettings>,
+    pub merge_settings_loading: bool,
     pub last_fetch: Option<Instant>,
     /// 操作の反映を待って取り直している PR 番号
     pub syncing: HashSet<u64>,
@@ -338,6 +352,9 @@ impl AppState {
             reviewer_menu: None,
             repo_labels: Vec::new(),
             labels_loading: false,
+            merge_menu: None,
+            merge_settings: None,
+            merge_settings_loading: false,
             last_fetch: None,
             syncing: HashSet::new(),
             devin_sessions: Vec::new(),

@@ -12,6 +12,7 @@ mod copy;
 mod detail;
 pub mod format;
 mod label;
+mod merge;
 mod pr_view;
 mod reviewer;
 mod table;
@@ -21,6 +22,7 @@ use copy::draw_copy_menu;
 use detail::detail_view;
 use format::ago;
 use label::draw_label_menu;
+use merge::draw_merge_menu;
 use pr_view::draw_pr_view;
 use reviewer::draw_reviewer_menu;
 use table::draw_table;
@@ -120,6 +122,9 @@ pub fn draw(f: &mut Frame, state: &mut AppState) {
     if state.reviewer_menu.is_some() {
         draw_reviewer_menu(f, state, f.area());
     }
+    if state.merge_menu.is_some() {
+        draw_merge_menu(f, state, f.area());
+    }
 }
 
 fn header_line(state: &AppState) -> Line<'static> {
@@ -197,6 +202,13 @@ fn footer_line(state: &AppState) -> Line<'static> {
             .bold(),
         );
     }
+    if state.merge_menu.is_some() {
+        return Line::from(
+            Span::raw(" 方法のキーでマージ  Enter 前回と同じ方法  他のキーで取りやめ")
+                .yellow()
+                .bold(),
+        );
+    }
     if state.copy_menu.is_some() {
         return Line::from(
             Span::raw(" コピーする項目のキーを押す. 他のキーで閉じる")
@@ -235,6 +247,7 @@ fn footer_line(state: &AppState) -> Line<'static> {
         ("XX", "close"),
         ("R", "review 依頼"),
         ("a", "ラベル"),
+        ("M", "マージ"),
         ("p", "説明とコメント"),
         ("d", "diff"),
         ("o", "ブラウザ"),
@@ -293,12 +306,13 @@ mod tests {
 
     use super::*;
     use crate::app::Tab;
-    use crate::app::{LabelMenu, PrView, ReviewerMenu};
+    use crate::app::{LabelMenu, MergeMenu, PrView, ReviewerMenu};
     use crate::domain::conversation::{Comment, Conversation, Entry, Verdict};
     use crate::domain::copy::copy_items;
     use crate::domain::devin::DevinConfig;
     use crate::domain::label::Label;
     use crate::domain::local::{LocalState, ReviewerSet, TabQuery};
+    use crate::domain::merge::{MergeMethod, MergeSettings};
     use crate::domain::op::PrOp;
     use crate::domain::pr::{Check, CheckState, MyReview, Pr, Reviewer, ReviewerState, Stack};
 
@@ -673,6 +687,11 @@ mod tests {
         lines.push(footer(&mut s));
         s.copy_menu = Some(vec![]);
         lines.push(footer(&mut s));
+        s.merge_menu = Some(MergeMenu {
+            number: 1,
+            head_oid: "oid-1".into(),
+        });
+        lines.push(footer(&mut s));
         s.confirm_op = Some((3, PrOp::Close));
         lines.push(footer(&mut s));
         s.confirm_force_checkout = Some((2, "feat-b".into()));
@@ -787,6 +806,40 @@ mod tests {
         s.tab = Tab::Review;
         out.push_str(&footer(&mut s));
         insta::assert_snapshot!(out);
+    }
+
+    /// #2 は stack の 2 段目で base が feat-a. 既定の方法は squash
+    #[test]
+    fn merge_menu() {
+        let mut s = state();
+        s.merge_settings = Some(MergeSettings::new(
+            MergeMethod::ALL.to_vec(),
+            Some(MergeMethod::Squash),
+        ));
+        s.merge_menu = Some(MergeMenu {
+            number: 2,
+            head_oid: "oid-2".into(),
+        });
+        let term = terminal(&mut s);
+        insta::assert_snapshot!(screen(&term));
+        let styles = styles(&term);
+        let at = |l: &str, r: std::ops::Range<usize>| l[r].trim().parse::<u16>().unwrap_or(0);
+        let popup: Vec<&str> = styles
+            .lines()
+            .filter(|l| (8..22).contains(&at(l, 0..2)) && (40..120).contains(&at(l, 3..6)))
+            .collect();
+        insta::assert_snapshot!("merge_menu_styles", popup.join("\n"));
+    }
+
+    /// 承認済みで CI も通っていれば注意点は出さない. 方法は取得中
+    #[test]
+    fn merge_menu_ready_and_loading() {
+        let mut s = state();
+        s.merge_menu = Some(MergeMenu {
+            number: 1,
+            head_oid: "oid-1".into(),
+        });
+        insta::assert_snapshot!(screen(&terminal(&mut s)));
     }
 
     #[test]

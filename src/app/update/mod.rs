@@ -15,6 +15,7 @@ use crate::domain::op::PrOp;
 mod chat;
 mod event;
 mod label;
+mod merge;
 mod picker;
 mod pr_view;
 mod reviewer;
@@ -117,8 +118,11 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
     if state.reviewer_menu.is_some() {
         return reviewer::reviewer_key(state, key);
     }
+    if state.merge_menu.is_some() {
+        return merge::merge_key(state, key);
+    }
     if state.tab.is_readonly()
-        && let KeyCode::Char(c @ ('u' | 'O' | 'D' | 'X' | 'R' | 'a')) = key.code
+        && let KeyCode::Char(c @ ('u' | 'O' | 'D' | 'X' | 'R' | 'a' | 'M')) = key.code
     {
         state.error(format!(
             "{c} は{}タブでは使えない",
@@ -142,6 +146,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('X') => request_state(state, PrOp::Close),
         KeyCode::Char('R') => reviewer::open_reviewers(state),
         KeyCode::Char('a') => label::open_labels(state),
+        KeyCode::Char('M') => merge::open_merge(state),
         KeyCode::Char('j') | KeyCode::Down => {
             state.list_mut().move_by(1);
             vec![]
@@ -588,7 +593,7 @@ mod tests {
         let mut s = review_state(vec![], vec![pr(10)]);
         s.local.reviewers = vec!["alice".into()];
         handle_key(&mut s, key('2'));
-        for c in ['u', 'O', 'D', 'X', 'R', 'a'] {
+        for c in ['u', 'O', 'D', 'X', 'R', 'a', 'M'] {
             assert!(handle_key(&mut s, key(c)).is_empty(), "{c}");
             assert_eq!(
                 message(&s),
@@ -596,6 +601,7 @@ mod tests {
             );
             assert!(s.confirm_op.is_none() && s.confirm_update.is_none());
             assert!(s.label_menu.is_none() && s.reviewer_menu.is_none());
+            assert!(s.merge_menu.is_none());
         }
     }
 
@@ -683,7 +689,7 @@ mod tests {
         let mut s = custom_state(vec![pr(1)], vec![pr(20)]);
         s.local.reviewers = vec!["alice".into()];
         handle_key(&mut s, key('3'));
-        for c in ['u', 'O', 'D', 'X', 'R'] {
+        for c in ['u', 'O', 'D', 'X', 'R', 'M'] {
             assert!(handle_key(&mut s, key(c)).is_empty(), "{c}");
             assert_eq!(
                 message(&s),

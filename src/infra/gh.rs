@@ -1,10 +1,12 @@
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
 use crate::domain::conversation::{Conversation, ReviewAction, same_body};
 use crate::domain::label::Label;
 use crate::domain::linear::{REVIEW_LINK_MARK, extract_review_url};
+use crate::domain::merge::{MergeMethod, MergeOutcome, MergeSettings};
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
 use crate::domain::review::arrange_reviews;
@@ -109,6 +111,47 @@ pub fn change_state(dir: &Path, number: u64, op: PrOp) -> Result<String> {
     gh(dir, &change_state_args(number, op))
 }
 
+/// repo で許可されたマージ方法と, 自分が前回使った方法
+pub fn fetch_merge_settings(dir: &Path, repo: &str) -> Result<MergeSettings> {
+    let out = gh(dir, &fetch_merge_settings_args(repo))?;
+    parse_merge_settings(&out)
+}
+
+/// 非同期のマージ API の版. 既定の版 (2022-11-28) には無い
+const MERGE_ASYNC_API_VERSION: &str = "2026-03-10";
+/// マージの結果を取り直す間隔と回数
+const MERGE_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const MERGE_POLL_TRIES: usize = 30;
+
+/// PR を method でマージし, 終わるまで待つ. stacked PR は同期のマージ API (`gh pr merge`) では
+/// マージできないので, 非同期のマージ API (`PUT .../merge-async`) で頼み, 結果を `GET .../merge-async/{uuid}`
+/// で取り直す. head が head_oid から動いていれば GitHub がマージしない. merge queue があれば queue に入れる.
+/// stack の途中の PR を頼むと, その下の PR もまとめてマージされる.
+/// head ブランチは消さない. リモートのブランチを消すかは repo の設定に任せる
+pub fn merge(
+    dir: &Path,
+    repo: &str,
+    number: u64,
+    method: MergeMethod,
+    head_oid: &str,
+) -> Result<MergeOutcome> {
+    let mut res = parse_async_merge(&gh(dir, &merge_args(repo, number, method, head_oid))?)?;
+    for _ in 0..MERGE_POLL_TRIES {
+        let AsyncMerge::Pending(uuid) = res else {
+            break;
+        };
+        std::thread::sleep(MERGE_POLL_INTERVAL);
+        res = parse_async_merge(&gh(dir, &merge_status_args(repo, number, &uuid))?)?;
+    }
+    match res {
+        AsyncMerge::Done(outcome) => Ok(outcome),
+        AsyncMerge::Pending(_) => bail!(
+            "マージの完了を {} 秒待っても終わらない. r で取り直して確かめる",
+            MERGE_POLL_INTERVAL.as_secs() * MERGE_POLL_TRIES as u64
+        ),
+    }
+}
+
 /// targets に review を依頼する. レビュー済みの人に依頼すると再依頼になる
 pub fn request_reviews(dir: &Path, number: u64, targets: &[String]) -> Result<String> {
     gh(dir, &request_reviews_args(number, targets))
@@ -126,6 +169,72 @@ pub fn edit_labels(dir: &Path, number: u64, add: &[String], remove: &[String]) -
         return Ok(String::new());
     }
     gh(dir, &edit_labels_args(number, add, remove))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawMergeSettings {
+    merge_commit_allowed: bool,
+    squash_merge_allowed: bool,
+    rebase_merge_allowed: bool,
+    #[serde(default)]
+    viewer_default_merge_method: String,
+}
+
+fn parse_merge_settings(json: &str) -> Result<MergeSettings> {
+    let raw: RawMergeSettings =
+        serde_json::from_str(json).context("マージの設定の JSON を読めない")?;
+    let allowed = [
+        (MergeMethod::Squash, raw.squash_merge_allowed),
+        (MergeMethod::Merge, raw.merge_commit_allowed),
+        (MergeMethod::Rebase, raw.rebase_merge_allowed),
+    ]
+    .into_iter()
+    .filter_map(|(m, ok)| ok.then_some(m))
+    .collect();
+    Ok(MergeSettings::new(
+        allowed,
+        MergeMethod::from_github(&raw.viewer_default_merge_method),
+    ))
+}
+
+/// 非同期のマージ API の応答. 頼んだときと結果の取り直しで同じ形
+#[derive(serde::Deserialize)]
+struct RawAsyncMerge {
+    status: String,
+    #[serde(default)]
+    details: RawAsyncMergeDetails,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct RawAsyncMergeDetails {
+    #[serde(default)]
+    message: String,
+    #[serde(default)]
+    uuid: String,
+}
+
+#[derive(Debug, PartialEq)]
+enum AsyncMerge {
+    /// 結果を取り直す uuid
+    Pending(String),
+    Done(MergeOutcome),
+}
+
+/// failed は details.message をエラーにする
+fn parse_async_merge(json: &str) -> Result<AsyncMerge> {
+    let raw: RawAsyncMerge =
+        serde_json::from_str(json).context("マージの応答の JSON を読めない")?;
+    let message = raw.details.message;
+    match raw.status.as_str() {
+        "pending" if raw.details.uuid.is_empty() => bail!("マージの応答に uuid が無い: {message}"),
+        "pending" => Ok(AsyncMerge::Pending(raw.details.uuid)),
+        "merged" => Ok(AsyncMerge::Done(MergeOutcome::Merged)),
+        "enqueued" => Ok(AsyncMerge::Done(MergeOutcome::Enqueued)),
+        "failed" if message.is_empty() => bail!("GitHub がマージしなかった"),
+        "failed" => bail!("{message}"),
+        other => bail!("マージの応答の status が分からない: {other}"),
+    }
 }
 
 fn parse_labels(json: &str) -> Result<Vec<Label>> {
@@ -282,6 +391,46 @@ fn change_state_args(number: u64, op: PrOp) -> Vec<String> {
         PrOp::Draft => strings(["pr", "ready", &n, "--undo"]),
         PrOp::Close => strings(["pr", "close", &n]),
     }
+}
+
+fn fetch_merge_settings_args(repo: &str) -> Vec<String> {
+    strings([
+        "repo",
+        "view",
+        repo,
+        "--json",
+        "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed,viewerDefaultMergeMethod",
+    ])
+}
+
+/// merge_action は既定 (merge queue があれば queue, 無ければ直接) のまま送らない
+fn merge_args(repo: &str, number: u64, method: MergeMethod, head_oid: &str) -> Vec<String> {
+    let method = match method {
+        MergeMethod::Squash => "squash",
+        MergeMethod::Merge => "merge",
+        MergeMethod::Rebase => "rebase",
+    };
+    vec![
+        "api".into(),
+        "-X".into(),
+        "PUT".into(),
+        "-H".into(),
+        format!("X-GitHub-Api-Version: {MERGE_ASYNC_API_VERSION}"),
+        format!("repos/{repo}/pulls/{number}/merge-async"),
+        "-f".into(),
+        format!("merge_method={method}"),
+        "-f".into(),
+        format!("sha={head_oid}"),
+    ]
+}
+
+fn merge_status_args(repo: &str, number: u64, uuid: &str) -> Vec<String> {
+    vec![
+        "api".into(),
+        "-H".into(),
+        format!("X-GitHub-Api-Version: {MERGE_ASYNC_API_VERSION}"),
+        format!("repos/{repo}/pulls/{number}/merge-async/{uuid}"),
+    ]
 }
 
 fn view_body_args(number: u64) -> Vec<String> {
@@ -526,6 +675,102 @@ mod tests {
     fn checkout_force_only_when_asked() {
         assert_eq!(checkout_args(7, false), ["pr", "checkout", "7"]);
         assert_eq!(checkout_args(7, true), ["pr", "checkout", "7", "--force"]);
+    }
+
+    #[test]
+    fn merge_uses_async_api() {
+        assert_eq!(
+            merge_args("o/r", 7, MergeMethod::Squash, "abc"),
+            [
+                "api",
+                "-X",
+                "PUT",
+                "-H",
+                "X-GitHub-Api-Version: 2026-03-10",
+                "repos/o/r/pulls/7/merge-async",
+                "-f",
+                "merge_method=squash",
+                "-f",
+                "sha=abc"
+            ]
+        );
+        assert_eq!(
+            merge_args("o/r", 7, MergeMethod::Merge, "abc")[7],
+            "merge_method=merge"
+        );
+        assert_eq!(
+            merge_args("o/r", 7, MergeMethod::Rebase, "abc")[7],
+            "merge_method=rebase"
+        );
+        assert_eq!(
+            merge_status_args("o/r", 7, "u-1"),
+            [
+                "api",
+                "-H",
+                "X-GitHub-Api-Version: 2026-03-10",
+                "repos/o/r/pulls/7/merge-async/u-1"
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_async_merge_by_status() {
+        let pending = r#"{"status":"pending","details":{"message":"accepted","uuid":"u-1","merge_method":"squash","merge_action":"direct_merge","expected_head_sha":"abc","bypass_rules":false}}"#;
+        assert_eq!(
+            parse_async_merge(pending).unwrap(),
+            AsyncMerge::Pending("u-1".into())
+        );
+        assert_eq!(
+            parse_async_merge(r#"{"status":"merged","details":{"message":"ok","sha":"def"}}"#)
+                .unwrap(),
+            AsyncMerge::Done(MergeOutcome::Merged)
+        );
+        assert_eq!(
+            parse_async_merge(r#"{"status":"enqueued","details":{"message":"queued"}}"#).unwrap(),
+            AsyncMerge::Done(MergeOutcome::Enqueued)
+        );
+        let failed = parse_async_merge(
+            r#"{"status":"failed","details":{"message":"Required status check \"build\" is failing"}}"#,
+        )
+        .unwrap_err();
+        assert_eq!(
+            failed.to_string(),
+            r#"Required status check "build" is failing"#
+        );
+        assert!(parse_async_merge(r#"{"status":"pending","details":{"message":"x"}}"#).is_err());
+        assert!(parse_async_merge(r#"{"status":"weird"}"#).is_err());
+    }
+
+    #[test]
+    fn merge_settings_from_json() {
+        assert_eq!(
+            fetch_merge_settings_args("o/r"),
+            [
+                "repo",
+                "view",
+                "o/r",
+                "--json",
+                "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed,viewerDefaultMergeMethod"
+            ]
+        );
+        let s = parse_merge_settings(
+            r#"{"mergeCommitAllowed":true,"rebaseMergeAllowed":false,"squashMergeAllowed":true,"viewerDefaultMergeMethod":"SQUASH"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            s,
+            MergeSettings::new(
+                vec![MergeMethod::Squash, MergeMethod::Merge],
+                Some(MergeMethod::Squash)
+            )
+        );
+        // 既定が許可されていなければ None
+        let s = parse_merge_settings(
+            r#"{"mergeCommitAllowed":false,"rebaseMergeAllowed":true,"squashMergeAllowed":false,"viewerDefaultMergeMethod":"MERGE"}"#,
+        )
+        .unwrap();
+        assert_eq!(s.allowed, [MergeMethod::Rebase]);
+        assert_eq!(s.default, None);
     }
 
     #[test]

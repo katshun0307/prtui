@@ -3,6 +3,7 @@ use anyhow::Result;
 use crate::domain::conversation::{Conversation, ReviewAction};
 use crate::domain::devin::{DevinMessage, DevinSession};
 use crate::domain::label::{Label, same_labels};
+use crate::domain::merge::{MergeMethod, MergeOutcome, MergeSettings};
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
 use crate::domain::review::review_targets;
@@ -21,6 +22,13 @@ pub enum Event {
     /// Linear review の URL. コメントに見つからなければ None
     LinearReview(u64, Result<Option<String>>),
     ChangedState(u64, PrOp, Result<String>),
+    /// repo で許可されたマージ方法
+    FetchedMergeSettings(Result<MergeSettings>),
+    Merged {
+        number: u64,
+        method: MergeMethod,
+        res: Result<MergeOutcome>,
+    },
     /// 1 件だけ取り直した結果. open でなくなっていれば None
     Reloaded(u64, Box<Result<Option<Pr>>>),
     /// repo の Devin session 一覧
@@ -99,6 +107,14 @@ pub enum Effect {
     ChangeState {
         number: u64,
         op: PrOp,
+    },
+    /// repo で許可されたマージ方法をスレッドで取る
+    FetchMergeSettings,
+    /// PR のマージを頼み, 終わるまで待つ. head が head_oid から動いていれば GitHub がマージしない
+    Merge {
+        number: u64,
+        method: MergeMethod,
+        head_oid: String,
     },
     /// targets に review を依頼する. レビュー済みの人には再依頼になる
     RequestReviews {

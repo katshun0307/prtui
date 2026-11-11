@@ -5,6 +5,7 @@ pub mod devin;
 pub mod label;
 pub mod linear;
 pub mod local;
+pub mod merge;
 pub mod op;
 pub mod pr;
 pub mod review;

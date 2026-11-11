@@ -10,6 +10,7 @@ use crate::app::event::{Effect, Event, WatchUntil};
 use crate::app::state::{AppState, Composing, PrList};
 use crate::domain::label::apply_diff;
 use crate::domain::local::is_diverged;
+use crate::domain::merge::MergeOutcome;
 use crate::domain::op::PrOp;
 use crate::domain::pr::Pr;
 use crate::domain::stack::arrange;
@@ -130,6 +131,55 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
                     state.error(format!("#{n} の {} 失敗: {e}", op.label()));
                     vec![Effect::Watch {
                         number: n,
+                        until: WatchUntil::Immediately,
+                    }]
+                }
+            }
+        }
+        Event::FetchedMergeSettings(res) => {
+            state.merge_settings_loading = false;
+            match res {
+                Ok(settings) => state.merge_settings = Some(settings),
+                // 方法が分からなければ選べないので確認画面を閉じる. 次に開いたときに取り直す
+                Err(e) => {
+                    state.merge_menu = None;
+                    state.error(format!("マージ方法の取得失敗: {e}"));
+                }
+            }
+            vec![]
+        }
+        Event::Merged {
+            number,
+            method,
+            res,
+        } => {
+            state.busy = None;
+            match res {
+                Ok(MergeOutcome::Merged) => {
+                    state.info(format!("#{number} を {} でマージした", method.label()));
+                    // stack の途中の PR なら下の PR もまとめてマージされるので, 全件も取り直す
+                    let mut effects = vec![Effect::Watch {
+                        number,
+                        until: WatchUntil::Gone,
+                    }];
+                    if !state.mine.loading {
+                        state.mine.loading = true;
+                        effects.push(Effect::Fetch);
+                    }
+                    effects
+                }
+                Ok(MergeOutcome::Enqueued) => {
+                    state.info(format!("#{number} を merge queue に入れた"));
+                    vec![Effect::Watch {
+                        number,
+                        until: WatchUntil::Immediately,
+                    }]
+                }
+                Err(e) => {
+                    state.error(format!("#{number} のマージ失敗: {e:#}"));
+                    // head が動いていて断られたときなどに最新を出す
+                    vec![Effect::Watch {
+                        number,
                         until: WatchUntil::Immediately,
                     }]
                 }

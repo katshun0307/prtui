@@ -1,0 +1,37 @@
+---
+source: src/ui/mod.rs
+expression: "popup.join(\"\\n\")"
+---
+ 9  40 "┌ #2 をマージする ─────────────────────────────────────────────────────────────┐" fg=Yellow
+10  40 "│" fg=Yellow
+10  41 " 土台の上に画面を足す" BOLD
+10 119 "│" fg=Yellow
+11  40 "│" fg=Yellow
+11  41 " feat-b" fg=Cyan
+11  48 " → " fg=Indexed(245)
+11  51 "feat-a" fg=Cyan
+11 119 "│" fg=Yellow
+12  40 "│" fg=Yellow
+12 119 "│" fg=Yellow
+13  40 "│ ! CI が 1 件実行中" fg=Yellow
+13 119 "│" fg=Yellow
+14  40 "│ ! 承認が無い" fg=Yellow
+14 119 "│" fg=Yellow
+15  40 "│ ! 未解決のスレッドが 2 件ある" fg=Yellow
+15 119 "│" fg=Yellow
+16  40 "│ ! base は main ではなく feat-a" fg=Yellow
+16 119 "│" fg=Yellow
+17  40 "│" fg=Yellow
+17 119 "│" fg=Yellow
+18  40 "│" fg=Yellow
+18  41 " s " fg=Cyan BOLD
+18  44 " squash" BOLD
+18  51 "  (Enter)" fg=Indexed(245)
+18 119 "│" fg=Yellow
+19  40 "│" fg=Yellow
+19  41 " m " fg=Cyan BOLD
+19 119 "│" fg=Yellow
+20  40 "│" fg=Yellow
+20  41 " r " fg=Cyan BOLD
+20 119 "│" fg=Yellow
+21  40 "└──────────────────────────────────────────────────────────────────────────────┘" fg=Yellow
