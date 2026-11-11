@@ -35,6 +35,9 @@
 - キャッシュ: 全件取得に成功するたびに一覧を `$XDG_CACHE_HOME/prtui/<owner>__<name>.json` (未設定なら `~/.cache`) に書く. 起動時はこれを読んで即表示し, 裏で取り直す. ヘッダに `取得 Xm 前` を出し, 取り直しが終わるまで `(キャッシュ)` を付ける. `Pr` の形が変わって読めないキャッシュは捨てる. `--dump` はキャッシュを使わない
 - フッターのメッセージ: 操作の結果 (チェックアウトした, 取得失敗など) はフッターにキー案内の代わりに出し, 次に何かキーを押すと消してキー案内に戻す. 押したキーが新しいメッセージを出せばそれに置き換わる
 - 操作後の更新: `u`, `O`, `DD`, `XX`, `R`, `a` の後は全件を取り直さず, その PR だけを `fetch_pr` (`repository.pullRequest` に同じ fragment) で取り直して差し替える. 止める条件は `WatchUntil` (`app/event.rs`) のデータで表す. 反映を待つため 2 秒おきに最大 10 回取り直す. 止める条件は, `u` なら head oid が変わる, open / draft なら `isDraft` が変わる, close なら open でなくなる (一覧から消す), `a` ならラベルが狙いの集合になる. 待っている間は一覧のタイトルに `#n を同期中…` を出す. 差し替え後は `arrange` で並びと stack をまとめ直し, 選択中の PR は番号で追う
+- PR ビュー (`p`): 選択中の PR の説明とコメントを全画面で読む (2026-11-09 追加. ユーザーの指定). どのタブの PR でも開ける. 開くたびに GraphQL (`conversation.graphql`) で取り, キャッシュはしない. 説明を先頭に, 会話のコメント, レビューの本文, 行へのスレッド (`path:line` と未解決 / 解決済 / outdated. スレッド内のコメントは字下げ) を時刻の古い順に並べる. 本文の無い COMMENTED のレビュー (行へのコメントの入れ物) と未提出 (PENDING) のレビューは出さない. 本文は markdown のまま出し, HTML コメントだけ除く (PR テンプレートと bot が入れるため). 見出しは bold, 引用とコードブロックの囲みは DIM. 書き込みは新しい側の 100 件ずつ (スレッド内は先頭 100 件) を取り, 取らなかった件数を説明の下に出す. ヘッダは背景色付きの 2 行で, スクロールしても残る. 1 行目に番号とタイトル (と Draft), 2 行目に author, `head → base` と, コメント, レビュー, スレッドの件数と未解決の数を出す (2026-11-11 に 1 行から変更. ユーザーの指定. どの PR かを常に分かるようにするため). 説明と各書き込み (コメント, レビュー, スレッド) の先頭は `── <見出し> ───…` の欄の幅いっぱいの罫線にして境目を分ける (同日. 空行だけでは区切りが分かりにくいとの指摘). スレッド内の返信は罫線にせず字下げした名前の行で分ける. ヘッダの値は開いたときの `Pr` から `PrView::new` で写す (自分タブ以外の PR は後から引けないため). `j`/`k`, `Ctrl-d`/`Ctrl-u`, `Space`/`PageUp`, `g`/`G` でスクロール, `o` でブラウザ, `r` で取り直し, `Esc`/`q` で一覧に戻る
+  - レビュー (`!`): 続けて `a` で承認, `c` でコメント (他のキーで取りやめ). 本文は `${VISUAL:-${EDITOR:-vi}}` で書き (会話ビューの `e` と同じ一時ファイルの仕組み. 戻った `Event::Composed` は `PrView::composing` が Some ならレビューに使う), `gh pr review <n> --approve|--comment --body` で送る. 承認は本文が空でも送り (`--body` を付けない), コメントは空なら取りやめる. 承認のエディタの初期値は git config `prtui.approve-body` (`LGTM 👍` など. repo ごとでも global でもよい. 2026-11-09 追加. ユーザーの指定) で, 消して保存すれば本文なしで承認する. コメントの初期値は常に空. エディタを非 0 で終えたら取りやめ. 自分の PR の承認などは GitHub のエラーをそのままフッターに出す (タブで制限しない). 成功したら説明とコメントとレビュータブを取り直す. 送信中は PR ビューを閉じない. 変更要求 (request changes) はユーザーの指定に無いので入れていない
+  - 説明の編集 (`e`): PR の説明をエディタ (git config `prtui.editor`, 無ければ `${VISUAL:-${EDITOR:-vi}}`) で書き換える (2026-11-11 追加. ユーザーの指定). 表示中の説明 (HTML コメントを除く前の生の本文. CRLF は LF にする) を初期値にし, 戻った `Event::Composed` は `PrView::composing` が `Composing::Body` なら説明の更新に使う. 改行コードと末尾の空白だけの違いは変更とみなさず何もしない. 空にするのは許す. 更新は `gh pr edit <n> --body-file -` に stdin で渡す. GitHub の API に楽観ロックが無いので, 直前に `gh pr view --json body` で取り直し, エディタを開いたときの説明と違えば書き換えずにエラーにする (編集中に他の人や bot が書き換えた内容を消さないため). 失敗したら書いた内容を `PrView::body_draft` に残し, 次の `e` でそれを開く (`r` で取り直してから差分を手で直す). タブでは制限せず GitHub のエラーを出す. 成功したら説明とコメントを取り直す. 更新中は PR ビューを閉じず, `!` と `e` も重ねない
 - Devin session: PR に紐づく Devin session のやり取りを読み, メッセージを送る (2026-10-29 追加. 仕様はユーザーと質疑で決めた).
   - 設定は git config `prtui.devin-token` と `prtui.devin-org` (`org-...`). token は個人, org は組織ごとなので置き場所 (global / repo) は自由にした. 未設定なら session を取らず, Devin 列と詳細欄の `devin:` 行を出さない (キャッシュに session が残っていても出さない). フッターの `v` も出さないが, 押せば設定を促すエラーを出す. 設定の要らない `V` (Devin Review) は残す (2026-11-06 変更. それまでは未設定でも空の Devin 列を出していた)
   - session の特定: Devin API v3 の session 一覧 (`GET /v3/organizations/{org}/sessions`) に PR で絞る引数が無い. そこで `repo_names=<owner/name>` と `updated_after=30 日前` で取り (200 件 × 最大 5 ページ), 各 session の `pull_requests[].pr_url` を PR の URL と照合する (末尾 `/` と大文字小文字は無視). PR 本文の Devin のリンクから取る案は, 人が作った PR に後から Devin を入れた場合に拾えないので採らなかった. 1 つの PR に複数あれば `updated_at` が最新の 1 つを使う. 他人の session でも PR が一致すれば出す
@@ -70,20 +73,20 @@
 |---|---|
 | `src/main.rs` | 引数処理 (`-C`, `--dump`), 端末初期化, イベントループ, 外部コマンド実行時の TUI 一時停止 |
 | `src/dump.rs` | `--dump` のテキスト出力. 取得は `run`, 文字列の組み立ては純粋関数 (`header`, `mine`, `review`, `custom`) で, snapshot は `src/snapshots/` |
-| `src/domain/` | 純粋な型と関数. `pr.rs` (`Pr`, `MyReview`), `stack.rs` (`arrange`, `arrange_flat`, `group_stacks`), `review.rs` (`review_targets`, `reviewer_choices`, `arrange_reviews`), `linear.rs` (issue キーと review URL の抽出), `copy.rs` (`copy_items`), `local.rs` (`LocalState`, `parse_reviewers`, `ReviewerSet`, `parse_reviewer_sets`, `TabQuery`, `parse_tabs`), `op.rs` (`PrOp`), `label.rs` (`Label`, `label_choices`, `label_diff`), `devin.rs` (Devin の型と `session_for`, `review_url`), `cache.rs` (キャッシュの型 `Cache`, `CustomCache`) |
+| `src/domain/` | 純粋な型と関数. `conversation.rs` (PR ビューの `Conversation`, `Entry`, `Verdict`, `ReviewAction`, 本文の整形 `tidy_body`, 説明の編集の `editable_body` と `same_body`), `pr.rs` (`Pr`, `MyReview`), `stack.rs` (`arrange`, `arrange_flat`, `group_stacks`), `review.rs` (`review_targets`, `reviewer_choices`, `arrange_reviews`), `linear.rs` (issue キーと review URL の抽出), `copy.rs` (`copy_items`), `local.rs` (`LocalState`, `parse_reviewers`, `ReviewerSet`, `parse_reviewer_sets`, `TabQuery`, `parse_tabs`), `op.rs` (`PrOp`), `label.rs` (`Label`, `label_choices`, `label_diff`), `devin.rs` (Devin の型と `session_for`, `review_url`), `cache.rs` (キャッシュの型 `Cache`, `CustomCache`) |
 | `src/infra/process.rs` | コマンド実行ヘルパ `run`, `open_url` |
 | `src/infra/git.rs` | メイン worktree の解決 `main_worktree`, `read_local_state` (現在ブランチ, dirty, refs/heads の oid, git config) |
-| `src/infra/gh.rs` | gh コマンド. 全件取得 `fetch_prs`, レビュータブの `fetch_reviews`, 追加のタブの `fetch_custom`, 1 件取得 `fetch_pr`, `update_branch`, `checkout`, `change_state`, `request_reviews`, `fetch_labels`, `edit_labels`, `view_web`, `linear_review_url`. 引数の組み立ては `*_args` の純粋関数にしてテストする |
+| `src/infra/gh.rs` | gh コマンド. 全件取得 `fetch_prs`, レビュータブの `fetch_reviews`, 追加のタブの `fetch_custom`, 1 件取得 `fetch_pr`, PR ビューの `fetch_conversation`, `submit_review`, `edit_body`, `update_branch`, `checkout`, `change_state`, `request_reviews`, `fetch_labels`, `edit_labels`, `view_web`, `linear_review_url`. 引数の組み立ては `*_args` の純粋関数にしてテストする |
 | `src/infra/graphql/` | `*.graphql` (クエリと fragment の本文), `schema.graphql` (GitHub の公開 schema. `task schema` で取り直す), `query.rs` (`.graphql` を `include_str!` して送る文書を組み立てる. schema に照らす検証テストもここ), `raw.rs` (`Raw*` 型), `mod.rs` (`Pr` への変換と JSON の解析 `parse_search` / `parse_review` / `parse_custom` / `parse_one`) |
 | `src/infra/devin.rs` | Devin API v3 (`fetch_sessions`, `fetch_messages`, `send_message`) を curl で呼ぶ. JSON の解析 `parse_*` |
 | `src/infra/cache.rs` | PR 一覧と Devin session 一覧のディスクキャッシュの置き場所と読み書き |
-| `src/app/state.rs` | 全状態 `AppState`, タブ `Tab` とタブごとの一覧 `PrList`, 追加のタブ `CustomTab`, 会話ビューの `ChatView`, ラベル選択画面の `LabelMenu`, review 依頼の選択画面の `ReviewerMenu` |
+| `src/app/state.rs` | 全状態 `AppState`, タブ `Tab` とタブごとの一覧 `PrList`, 追加のタブ `CustomTab`, 会話ビューの `ChatView`, ラベル選択画面の `LabelMenu`, review 依頼の選択画面の `ReviewerMenu`, PR ビューの `PrView` |
 | `src/app/event.rs` | `Event` (スレッドの結果), `Effect` (副作用の要求), `Action` (main への指示), `WatchUntil` |
-| `src/app/update/` | キー操作, イベント処理, 時間の遷移 (`tick`). `AppState` を更新して `Vec<Effect>` を返す純粋関数. `mod.rs` (`refresh`, `tick`, `handle_key` と一覧の操作), `event.rs` (`handle_event`), `chat.rs` (会話ビューのキー), `label.rs` (ラベル選択画面のキー), `reviewer.rs` (review 依頼の選択画面のキー), `picker.rs` (2 つの選択画面で共通の絞り込みとカーソル移動) |
+| `src/app/update/` | キー操作, イベント処理, 時間の遷移 (`tick`). `AppState` を更新して `Vec<Effect>` を返す純粋関数. `mod.rs` (`refresh`, `tick`, `handle_key` と一覧の操作), `event.rs` (`handle_event`), `chat.rs` (会話ビューのキー), `pr_view.rs` (PR ビューのキー, レビューの送信, 説明の編集), `label.rs` (ラベル選択画面のキー), `reviewer.rs` (review 依頼の選択画面のキー), `picker.rs` (2 つの選択画面で共通の絞り込みとカーソル移動) |
 | `src/app/ports.rs` | runtime が外とやりとりする trait (`Github`, `Git`, `Devin`, `CacheStore`, `Desktop`) とその束 `Ports`, 待ち時間の `RuntimeConfig`. テスト用の fake もここ |
 | `src/app/adapters.rs` | ports の実装. infra の関数に委譲する. `real_ports` |
 | `src/app/runtime.rs` | `App`. Effect を実行し, スレッドの起動と ports の呼び出しをここに閉じる |
-| `src/ui/` | 描画. `mod.rs` (ヘッダ, フッタ, 配色), `table.rs` (一覧. 列はタブごとの `Column` の表), `detail.rs` (詳細欄), `chat.rs` (会話ビュー), `copy.rs`, `label.rs`, `reviewer.rs` (ポップアップ. 配置は `mod.rs` の `popup_area`), `format.rs`. snapshot は `src/ui/snapshots/` |
+| `src/ui/` | 描画. `mod.rs` (ヘッダ, フッタ, 配色), `table.rs` (一覧. 列はタブごとの `Column` の表), `detail.rs` (詳細欄), `chat.rs` (会話ビュー), `pr_view.rs` (PR ビュー), `copy.rs`, `label.rs`, `reviewer.rs` (ポップアップ. 配置は `mod.rs` の `popup_area`), `format.rs`. snapshot は `src/ui/snapshots/` |
 
 ### レイヤー化した理由
 
@@ -172,6 +175,8 @@ runtime にも checkout の dirty チェック, watch の打ち切り, キャッ
   - POST messages が SessionResponse を返すか
   - `pull_requests[].pr_url` が GitHub の PR URL と同じ形か
 - 会話ビューの実画面 (スクロール, 入力, エディタからの復帰と一時ファイルの削除)
+- PR ビューの `e` で実際に説明を書き換えること. argv と判定は単体テストで, キーから Effect と結果の反映までは update と runtime のテストでだけ確かめた
+- PR ビューの `!` で実際にレビューを送ること. 他人の PR に承認やコメントが残るので試していない. `gh pr review` の argv は単体テストで, キーから Effect と結果の反映までは update のテストでだけ確かめた. 表示 (取得, スクロール, `!` の取りやめ) は feedforce/omni-hub の実 PR で tmux で確かめた
 
 
 - 操作後の `#n を同期中…` からの差し替え (実際の `u`, `O`, `DD`, `XX` を実行していないため)
@@ -191,4 +196,6 @@ runtime にも checkout の dirty チェック, watch の打ち切り, キャッ
 - PR が 100 件を超えると search の `first:100` で切れる. レビュータブの `reviewed-by:@me` は close されるまで残るので, 長く open のままの PR が溜まりうる
 - Devin session は直近 30 日に更新されたもので, 最大 1000 件しか見ない. それより古い session の PR は Devin 列が空になる
 - 自分タブで操作した PR の取り直し (`Reloaded`) は自分タブだけを差し替える. 同じ PR が追加のタブやレビュータブにも出ていれば, 次の全件取得まで古いまま
+- PR ビューは markdown を描画しない (表, リンク, `<details>` などの HTML はそのまま出る). bot のコメントは HTML が多く読みにくい
+- PR ビューの書き込みは種類ごとに新しい側の 100 件まで. 超えた分は件数だけ出すので `o` でブラウザで見る
 - 詳細欄は高さ 10 で固定. CI の失敗と実行中の行と devin 行が全部出ると URL の行が欄からはみ出ることがある

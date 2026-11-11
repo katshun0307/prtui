@@ -202,3 +202,72 @@ pub(super) struct OneData {
 pub(super) struct Repository {
     pub(super) pull_request: Option<RawPr>,
 }
+
+/// 件数の上限で切られうる connection. 切られた分を数えるため totalCount も取る
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct Counted<T> {
+    pub(super) total_count: usize,
+    pub(super) nodes: Vec<T>,
+}
+
+/// PR ビューのコメント. 削除されたユーザーなら author は null
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CommentNode {
+    pub(super) author: Option<Login>,
+    pub(super) created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub(super) body: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ReviewNode {
+    pub(super) state: String,
+    /// 未提出 (PENDING) なら null
+    pub(super) submitted_at: Option<DateTime<Utc>>,
+    pub(super) created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub(super) body: String,
+    pub(super) author: Option<Login>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ThreadNode {
+    pub(super) is_resolved: bool,
+    pub(super) is_outdated: bool,
+    pub(super) path: String,
+    pub(super) line: Option<u64>,
+    pub(super) original_line: Option<u64>,
+    pub(super) comments: Nodes<CommentNode>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct RawConversation {
+    #[serde(default)]
+    pub(super) body: String,
+    pub(super) created_at: DateTime<Utc>,
+    pub(super) author: Option<Login>,
+    pub(super) comments: Counted<CommentNode>,
+    pub(super) reviews: Counted<ReviewNode>,
+    pub(super) review_threads: Counted<ThreadNode>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ConversationResponse {
+    pub(super) data: ConversationData,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ConversationData {
+    pub(super) repository: ConversationRepository,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ConversationRepository {
+    pub(super) pull_request: Option<RawConversation>,
+}

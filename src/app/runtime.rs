@@ -151,6 +151,29 @@ impl App {
                 }
                 Effect::Watch { number, until } => self.watch(number, until),
                 Effect::FetchLabels => self.spawn(|p| Event::FetchedLabels(p.gh.fetch_labels())),
+                Effect::FetchConversation(n) => {
+                    self.spawn(move |p| Event::FetchedConversation(n, p.gh.fetch_conversation(n)))
+                }
+                Effect::SubmitReview {
+                    number,
+                    action,
+                    body,
+                } => self.spawn(move |p| {
+                    let res = p.gh.submit_review(number, action, &body);
+                    Event::SubmittedReview {
+                        number,
+                        action,
+                        res,
+                    }
+                }),
+                Effect::EditBody {
+                    number,
+                    original,
+                    body,
+                } => self.spawn(move |p| Event::EditedBody {
+                    number,
+                    res: p.gh.edit_body(number, &original, &body),
+                }),
                 Effect::EditLabels {
                     number,
                     add,
@@ -204,17 +227,14 @@ impl App {
                     });
                 }
                 Effect::Compose { draft } => {
-                    let path =
-                        std::env::temp_dir().join(format!("prtui-devin-{}.md", std::process::id()));
+                    let path = std::env::temp_dir()
+                        .join(format!("prtui-compose-{}.md", std::process::id()));
                     match fs::write(&path, draft) {
                         Ok(()) => {
-                            action = Action::Suspend(vec![
-                                "sh".into(),
-                                "-c".into(),
-                                "${VISUAL:-${EDITOR:-vi}} \"$1\"".into(),
-                                "sh".into(),
-                                path.display().to_string(),
-                            ]);
+                            action = Action::Suspend(editor_command(
+                                self.state.local.editor.as_deref(),
+                                &path.display().to_string(),
+                            ));
                             self.pending_compose = Some(path);
                         }
                         Err(e) => self
@@ -336,6 +356,20 @@ fn snapshot(state: &AppState) -> Cache {
             })
             .collect(),
     }
+}
+
+/// path をエディタで開くコマンド. editor (git config `prtui.editor`) が無ければ
+/// `$VISUAL`, `$EDITOR`, vi の順に使う. `code --wait` のように引数を含められるよう, git の
+/// `core.editor` と同じく sh に渡す. path は `$1` で渡して sh に解釈させない
+fn editor_command(editor: Option<&str>, path: &str) -> Vec<String> {
+    let editor = editor.unwrap_or("${VISUAL:-${EDITOR:-vi}}");
+    vec![
+        "sh".into(),
+        "-c".into(),
+        format!("{editor} \"$1\""),
+        "sh".into(),
+        path.into(),
+    ]
 }
 
 /// Devin の config が無ければ API を呼ばずにエラーにする. 実行中に config を消されたときに備える
@@ -586,6 +620,29 @@ mod tests {
     }
 
     #[test]
+    fn edit_body_then_refetches_conversation() {
+        let f = Fakes::default();
+        let mut a = app(&f);
+        let mut view = crate::app::state::PrView::new(&pr(1));
+        view.fetching = false;
+        view.saving_body = true;
+        a.state.pr_view = Some(view);
+        a.perform(vec![Effect::EditBody {
+            number: 1,
+            original: "old".into(),
+            body: "new".into(),
+        }]);
+        a.pump_blocking(2);
+        assert_eq!(
+            f.gh.calls(),
+            vec![r#"edit_body 1 "old" "new""#, "fetch_conversation 1"]
+        );
+        let v = a.state.pr_view.as_ref().unwrap();
+        assert!(!v.saving_body);
+        assert_eq!(v.notice.as_deref(), Some("#1 の説明を更新した"));
+    }
+
+    #[test]
     fn copy_success_is_info() {
         let f = Fakes::default();
         let mut a = app(&f);
@@ -715,5 +772,23 @@ mod tests {
         assert_eq!(numbers(&a.state.mine.prs), vec![2, 3]);
         let saved = f.cache.cache.lock().unwrap().clone().expect("saved");
         assert_eq!(numbers(&saved.prs), vec![2, 3]);
+    }
+
+    #[test]
+    fn editor_command_uses_config_or_env() {
+        assert_eq!(
+            super::editor_command(None, "/tmp/a b.md"),
+            [
+                "sh",
+                "-c",
+                "${VISUAL:-${EDITOR:-vi}} \"$1\"",
+                "sh",
+                "/tmp/a b.md"
+            ]
+        );
+        assert_eq!(
+            super::editor_command(Some("code --wait"), "/tmp/a.md"),
+            ["sh", "-c", "code --wait \"$1\"", "sh", "/tmp/a.md"]
+        );
     }
 }

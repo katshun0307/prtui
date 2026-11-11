@@ -4,9 +4,10 @@ use chrono::Utc;
 
 use super::chat::send;
 use super::label::{clamp_cursor, diff_text};
+use super::pr_view::{save_body, submit_review};
 use super::reviewer;
 use crate::app::event::{Effect, Event, WatchUntil};
-use crate::app::state::{AppState, PrList};
+use crate::app::state::{AppState, Composing, PrList};
 use crate::domain::label::apply_diff;
 use crate::domain::local::is_diverged;
 use crate::domain::op::PrOp;
@@ -210,6 +211,85 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
                 }
             }
         }
+        Event::FetchedConversation(n, res) => {
+            // 閉じたか別の PR に移った後に届いた結果は捨てる
+            let Some(view) = state.pr_view.as_mut().filter(|v| v.number == n) else {
+                return vec![];
+            };
+            view.fetching = false;
+            match res {
+                Ok(c) => {
+                    view.conversation = Some(c);
+                    view.error = None;
+                }
+                Err(e) => view.error = Some(format!("取得失敗: {e}")),
+            }
+            vec![]
+        }
+        Event::SubmittedReview {
+            number: n,
+            action,
+            res,
+        } => {
+            let mut effects = vec![];
+            // レビュータブの「自分」列を変えるため取り直す
+            if res.is_ok() && !state.review.loading {
+                state.review.loading = true;
+                effects.push(Effect::FetchReviews);
+            }
+            let text = match &res {
+                Ok(_) => format!("#{n} を{}", action.phrase()),
+                Err(e) => format!("#{n} のレビュー送信失敗: {e}"),
+            };
+            match state.pr_view.as_mut().filter(|v| v.number == n) {
+                Some(view) => {
+                    view.submitting = false;
+                    match res {
+                        Ok(_) => {
+                            view.notice = Some(text);
+                            // 送ったレビューを出す
+                            if !view.fetching {
+                                view.fetching = true;
+                                effects.push(Effect::FetchConversation(n));
+                            }
+                        }
+                        Err(_) => view.error = Some(text),
+                    }
+                }
+                None if res.is_ok() => state.info(text),
+                None => state.error(text),
+            }
+            effects
+        }
+        Event::EditedBody { number: n, res } => {
+            let mut effects = vec![];
+            match state.pr_view.as_mut().filter(|v| v.number == n) {
+                Some(view) => {
+                    view.saving_body = false;
+                    match res {
+                        Ok(_) => {
+                            view.body_draft = None;
+                            view.notice = Some(format!("#{n} の説明を更新した"));
+                            if !view.fetching {
+                                view.fetching = true;
+                                effects.push(Effect::FetchConversation(n));
+                            }
+                        }
+                        Err(e) => {
+                            view.error = Some(format!(
+                                "#{n} の説明の更新失敗: {e}. 書いた内容は次の e で開く"
+                            ))
+                        }
+                    }
+                }
+                // 更新中は閉じられないので通らないが, 結果は一覧のフッターに出す
+                None => match res {
+                    Ok(_) => state.info(format!("#{n} の説明を更新した")),
+                    Err(e) => state.error(format!("#{n} の説明の更新失敗: {e}")),
+                },
+            }
+            effects
+        }
         Event::FetchedLabels(res) => {
             state.labels_loading = false;
             match res {
@@ -286,6 +366,30 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
             }
         }
         Event::Composed(res) => {
+            if let Some(view) = state.pr_view.as_mut()
+                && let Some(composing) = view.composing.take()
+            {
+                return match (res, composing) {
+                    (Ok(Some(text)), Composing::Review(action)) => {
+                        submit_review(view, action, &text)
+                    }
+                    (Ok(Some(text)), Composing::Body { original }) => {
+                        save_body(view, original, text)
+                    }
+                    // エディタを非 0 で終えたら取りやめ
+                    (Ok(None), c) => {
+                        view.notice = Some(match c {
+                            Composing::Review(_) => "レビューを取りやめた".into(),
+                            Composing::Body { .. } => "説明の編集を取りやめた".into(),
+                        });
+                        vec![]
+                    }
+                    (Err(e), _) => {
+                        view.error = Some(format!("エディタの実行失敗: {e}"));
+                        vec![]
+                    }
+                };
+            }
             let Some(chat) = state.chat.as_mut() else {
                 return vec![];
             };

@@ -2,8 +2,8 @@
 source: src/ui/mod.rs
 expression: "lines.join(\"\\n\")"
 ---
- j/k 移動  Tab/1-3 タブ  Enter checkout  c コピー  u main 取込  O open  DD draft  XX close  R review 依頼  a ラベル  d diff  o ブラウザ  l Linear  L Linear revi
- j/k 移動  Tab/1-3 タブ  Enter checkout  c コピー  d diff  o ブラウザ  l Linear  L Linear review  v Devin  V Devin Review  t Draft のみ  r 更新  q 終了
+ j/k 移動  Tab/1-3 タブ  Enter checkout  c コピー  u main 取込  O open  DD draft  XX close  R review 依頼  a ラベル  p 説明とコメント  d diff  o ブラウザ  l Lin
+ j/k 移動  Tab/1-3 タブ  Enter checkout  c コピー  p 説明とコメント  d diff  o ブラウザ  l Linear  L Linear review  v Devin  V Devin Review  t Draft のみ  r 更
  #1 をチェックアウトした
  チェックアウト失敗: 未コミットの変更がある
  文字で絞り込み  ↑↓ 移動  Tab 依頼する相手を選ぶ (組はメンバー全員)  Enter 依頼 (選んでいなければカーソルの項目)  Esc 閉じる

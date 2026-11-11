@@ -27,7 +27,8 @@ pub fn run_with_stdin(dir: &Path, program: &str, args: &[&str], stdin: &str) -> 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    // 流すのは小さな設定だけなので, 書き終えてから出力を読んでも詰まらない.
+    // 流す先 (curl の設定, pbcopy, gh pr edit の本文) はどれも stdin を読み切ってから出力するので,
+    // 書き終えてから出力を読んでも詰まらない.
     // ブロックを抜けて stdin を閉じないと, 子が EOF を待ち続ける
     if let Some(mut w) = child.stdin.take() {
         w.write_all(stdin.as_bytes())?;

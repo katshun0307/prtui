@@ -29,6 +29,10 @@ pub(crate) const QUERY_ONE: &str = concat!(
     include_str!("fragment_pr.graphql")
 );
 
+/// PR ビューの説明とコメント. 一覧の fragment は使わない.
+/// 書き込みは新しい側の 100 件ずつを取り, 取らなかった分は `totalCount` から数える
+pub(crate) const QUERY_CONVERSATION: &str = include_str!("conversation.graphql");
+
 #[cfg(test)]
 mod tests {
     use apollo_compiler::{ExecutableDocument, Schema};
@@ -47,6 +51,7 @@ mod tests {
             ("QUERY_REVIEW", QUERY_REVIEW),
             ("QUERY_CUSTOM", QUERY_CUSTOM),
             ("QUERY_ONE", QUERY_ONE),
+            ("QUERY_CONVERSATION", QUERY_CONVERSATION),
         ] {
             if let Err(e) = ExecutableDocument::parse_and_validate(&schema, doc, name) {
                 panic!("{name}:\n{}", e.errors);

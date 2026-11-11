@@ -1,0 +1,65 @@
+---
+source: src/ui/mod.rs
+expression: styles(&term)
+---
+ 0   0 " #1  ABC-1 土台を足す" bg=Indexed(237) BOLD
+ 0  21 "                                                                                                                                           " bg=Indexed(237)
+ 1   0 " katshun  " bg=Indexed(237)
+ 1  10 "feature/base" fg=Cyan bg=Indexed(237)
+ 1  22 " → " fg=Indexed(245) bg=Indexed(237)
+ 1  25 "main" fg=Cyan bg=Indexed(237)
+ 1  29 "  コメント 1  レビュー 2  スレッド 2" fg=Indexed(245) bg=Indexed(237)
+ 1  65 " (未解決 1)" fg=Yellow bg=Indexed(237)
+ 1  76 "                                                                                    " bg=Indexed(237)
+ 2   0 "── " fg=Indexed(245)
+ 2   3 "説明" BOLD
+ 2   9 "katshun" BOLD
+ 2  16 "  3d 前" fg=Indexed(245)
+ 2  24 "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────" fg=Indexed(245)
+ 3   0 "## 概要" BOLD
+ 6   0 "```rust" fg=Indexed(245)
+ 8   0 "```" fg=Indexed(245)
+ 9   0 "> 引用" fg=Indexed(245)
+11   0 "古い書き込み 3 件は省略. o でブラウザで見る" fg=Indexed(245)
+13   0 "── " fg=Indexed(245)
+13   3 "bob" BOLD
+13   6 "  2d 前" fg=Indexed(245)
+13  15 "コメント" fg=Indexed(245)
+13  24 "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────" fg=Indexed(245)
+16   0 "── " fg=Indexed(245)
+16   3 "src/a.rs:12" fg=Cyan
+16  16 "未解決" fg=Yellow
+16  23 "─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────" fg=Indexed(245)
+17   2 "alice" BOLD
+17   7 "  20h 前" fg=Indexed(245)
+19   2 "katshun" BOLD
+19   9 "  19h 前" fg=Indexed(245)
+22   0 "── " fg=Indexed(245)
+22   3 "alice" BOLD
+22   8 "  18h 前" fg=Indexed(245)
+22  18 "変更要求" fg=Red
+22  27 "─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────" fg=Indexed(245)
+25   0 "── " fg=Indexed(245)
+25   3 "src/b.rs:3" fg=Cyan
+25  15 "解決済  outdated" fg=Indexed(245)
+25  32 "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────" fg=Indexed(245)
+26   2 "carol" BOLD
+26   7 "  10h 前" fg=Indexed(245)
+29   1 "j/k" fg=Cyan
+29   4 " スクロール  " fg=Indexed(245)
+29  17 "C-d/C-u" fg=Cyan
+29  24 " 半画面  " fg=Indexed(245)
+29  33 "Space" fg=Cyan
+29  38 " 1 画面  " fg=Indexed(245)
+29  47 "g/G" fg=Cyan
+29  50 " 先頭/末尾  " fg=Indexed(245)
+29  62 "!" fg=Cyan
+29  63 " レビュー  " fg=Indexed(245)
+29  74 "e" fg=Cyan
+29  75 " 説明を編集  " fg=Indexed(245)
+29  88 "o" fg=Cyan
+29  89 " ブラウザ  " fg=Indexed(245)
+29 100 "r" fg=Cyan
+29 101 " 更新  " fg=Indexed(245)
+29 108 "q" fg=Cyan
+29 109 " 戻る  " fg=Indexed(245)
