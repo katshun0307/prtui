@@ -5,6 +5,7 @@ use std::time::Instant;
 use chrono::{DateTime, Utc};
 use ratatui::widgets::{ListState, TableState};
 
+use crate::domain::conversation::{Conversation, ReviewAction};
 use crate::domain::copy::CopyItem;
 use crate::domain::devin::{DevinMessage, DevinSession, session_for};
 use crate::domain::label::{Label, label_choices};
@@ -61,6 +62,71 @@ impl ChatView {
     pub fn set_draft(&mut self, draft: String) {
         self.cursor = draft.chars().count();
         self.draft = draft;
+    }
+}
+
+/// PR ビューでエディタに書かせているもの
+#[derive(Debug, Clone, PartialEq)]
+pub enum Composing {
+    Review(ReviewAction),
+    /// 説明の書き換え. original はエディタを開いたときの説明で, 変更と GitHub 側の更新の判定に使う
+    Body {
+        original: String,
+    },
+}
+
+/// `p` で開く PR ビュー. PR の説明とコメントを全画面に出す. どのタブの PR でも開ける
+#[derive(Debug, Default)]
+pub struct PrView {
+    pub number: u64,
+    /// 以下はヘッダに出す, 開いたときの PR の値. 自分タブ以外の PR は `AppState::pr` で引けないので持っておく
+    pub title: String,
+    pub author: String,
+    pub head: String,
+    pub base: String,
+    pub is_draft: bool,
+    /// 取得した説明とコメント. 取り直している間も前の内容を出す
+    pub conversation: Option<Conversation>,
+    pub fetching: bool,
+    /// PR ビューのフッターに出すエラー
+    pub error: Option<String>,
+    /// PR ビューのフッターに出す操作の結果. 次のキーで消す
+    pub notice: Option<String>,
+    /// `!` の後, 承認かコメントかのキー待ち
+    pub choosing_review: bool,
+    /// エディタで書いている. 戻った `Event::Composed` をレビューか説明の更新に使う
+    pub composing: Option<Composing>,
+    /// レビューを送信中
+    pub submitting: bool,
+    /// 説明を更新中
+    pub saving_body: bool,
+    /// `e` で書いた説明. 更新に失敗したら残し, 次の `e` でこれをエディタに渡す
+    pub body_draft: Option<String>,
+    /// 先頭からの表示位置
+    pub scroll: usize,
+    /// 描画が書く. 末尾を表示するときの scroll
+    pub max_scroll: usize,
+    /// 描画が書く. 本文の欄の高さ
+    pub viewport_height: u16,
+}
+
+impl PrView {
+    /// レビューの送信か説明の更新の最中. 閉じたり重ねたりしない
+    pub fn is_sending(&self) -> bool {
+        self.submitting || self.saving_body
+    }
+
+    pub fn new(pr: &Pr) -> Self {
+        Self {
+            number: pr.number,
+            title: pr.title.clone(),
+            author: pr.author.clone(),
+            head: pr.head_ref_name.clone(),
+            base: pr.base_ref_name.clone(),
+            is_draft: pr.is_draft,
+            fetching: true,
+            ..Default::default()
+        }
     }
 }
 
@@ -240,6 +306,8 @@ pub struct AppState {
     pub sessions_loading: bool,
     /// 会話ビューを開いていれば Some
     pub chat: Option<ChatView>,
+    /// PR ビューを開いていれば Some
+    pub pr_view: Option<PrView>,
 }
 
 impl AppState {
@@ -275,6 +343,7 @@ impl AppState {
             devin_sessions: Vec::new(),
             sessions_loading: false,
             chat: None,
+            pr_view: None,
         }
     }
 

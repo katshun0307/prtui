@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 
 use super::ports::{CacheStore, Desktop, Devin, Git, Github, Ports};
 use crate::domain::cache::Cache;
+use crate::domain::conversation::{Conversation, ReviewAction};
 use crate::domain::devin::{DevinConfig, DevinMessage, DevinSession};
 use crate::domain::label::Label;
 use crate::domain::local::LocalState;
@@ -35,6 +36,18 @@ impl Github for GhCli {
 
     fn fetch_pr(&self, number: u64) -> Result<Option<Pr>> {
         gh::fetch_pr(&self.dir, &self.repo, number)
+    }
+
+    fn fetch_conversation(&self, number: u64) -> Result<Conversation> {
+        gh::fetch_conversation(&self.dir, &self.repo, number)
+    }
+
+    fn submit_review(&self, number: u64, action: ReviewAction, body: &str) -> Result<String> {
+        gh::submit_review(&self.dir, number, action, body)
+    }
+
+    fn edit_body(&self, number: u64, original: &str, body: &str) -> Result<String> {
+        gh::edit_body(&self.dir, number, original, body)
     }
 
     fn update_branch(&self, number: u64, head_oid: &str) -> Result<String> {

@@ -8,6 +8,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 
 use crate::domain::cache::Cache;
+use crate::domain::conversation::{Conversation, ReviewAction};
 use crate::domain::devin::{DevinConfig, DevinMessage, DevinSession};
 use crate::domain::label::Label;
 use crate::domain::local::LocalState;
@@ -23,6 +24,11 @@ pub trait Github: Send + Sync + 'static {
     fn fetch_custom(&self, query: &str) -> Result<Vec<Pr>>;
     /// open でなくなっていれば None
     fn fetch_pr(&self, number: u64) -> Result<Option<Pr>>;
+    /// PR ビューの説明とコメント. open でない PR も取れる
+    fn fetch_conversation(&self, number: u64) -> Result<Conversation>;
+    fn submit_review(&self, number: u64, action: ReviewAction, body: &str) -> Result<String>;
+    /// 説明を body に書き換える. GitHub 側の説明が original から変わっていればエラーにして書き換えない
+    fn edit_body(&self, number: u64, original: &str, body: &str) -> Result<String>;
     fn update_branch(&self, number: u64, head_oid: &str) -> Result<String>;
     fn checkout(&self, number: u64, force: bool) -> Result<String>;
     fn change_state(&self, number: u64, op: PrOp) -> Result<String>;
@@ -103,6 +109,7 @@ pub(crate) mod fake {
 
     use super::{CacheStore, Desktop, Devin, Git, Github, Ports};
     use crate::domain::cache::Cache;
+    use crate::domain::conversation::{Conversation, ReviewAction};
     use crate::domain::devin::{DevinConfig, DevinMessage, DevinSession};
     use crate::domain::label::Label;
     use crate::domain::local::LocalState;
@@ -121,10 +128,12 @@ pub(crate) mod fake {
         pub custom: Mutex<Result<Vec<Pr>, String>>,
         /// `fetch_pr` が順に返す結果. 最後の 1 つは使い切らずに返し続ける. 空なら Ok(None)
         pub pr: Mutex<VecDeque<Result<Option<Pr>, String>>>,
-        /// update_branch, checkout, change_state, request_reviews, view_web, edit_labels の結果
+        /// update_branch, checkout, change_state, request_reviews, view_web, edit_labels,
+        /// submit_review, edit_body の結果
         pub op: Mutex<Result<String, String>>,
         pub linear: Mutex<Result<Option<String>, String>>,
         pub labels: Mutex<Result<Vec<Label>, String>>,
+        pub conversation: Mutex<Result<Conversation, String>>,
     }
 
     impl Default for FakeGh {
@@ -138,6 +147,7 @@ pub(crate) mod fake {
                 op: Mutex::new(Ok(String::new())),
                 linear: Mutex::new(Ok(None)),
                 labels: Mutex::new(Ok(vec![])),
+                conversation: Mutex::new(Err("説明とコメントが未設定".into())),
             }
         }
     }
@@ -177,6 +187,21 @@ pub(crate) mod fake {
                 q.front().cloned()
             };
             res.unwrap_or(Ok(None)).map_err(|e| anyhow!(e))
+        }
+
+        fn fetch_conversation(&self, number: u64) -> Result<Conversation> {
+            self.record(format!("fetch_conversation {number}"));
+            cloned(&self.conversation)
+        }
+
+        fn submit_review(&self, number: u64, action: ReviewAction, body: &str) -> Result<String> {
+            self.record(format!("submit_review {number} {action:?} {body}"));
+            cloned(&self.op)
+        }
+
+        fn edit_body(&self, number: u64, original: &str, body: &str) -> Result<String> {
+            self.record(format!("edit_body {number} {original:?} {body:?}"));
+            cloned(&self.op)
         }
 
         fn update_branch(&self, number: u64, head_oid: &str) -> Result<String> {

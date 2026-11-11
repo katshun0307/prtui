@@ -1,5 +1,6 @@
 use anyhow::Result;
 
+use crate::domain::conversation::{Conversation, ReviewAction};
 use crate::domain::devin::{DevinMessage, DevinSession};
 use crate::domain::label::{Label, same_labels};
 use crate::domain::op::PrOp;
@@ -28,10 +29,24 @@ pub enum Event {
     DevinMessages(String, Result<Vec<DevinMessage>>),
     /// 送信した session ID と, 送信後の session
     DevinSent(String, Result<DevinSession>),
-    /// エディタで書いた内容. エディタが非 0 で終わったら None
+    /// エディタで書いた内容. エディタが非 0 で終わったら None.
+    /// PR ビューで書いていればレビューか説明の更新に, そうでなければ会話ビューの送信に使う
     Composed(Result<Option<String>>),
     /// repo のラベル一覧
     FetchedLabels(Result<Vec<Label>>),
+    /// PR ビューの説明とコメント
+    FetchedConversation(u64, Result<Conversation>),
+    /// PR ビューから送ったレビューの結果
+    SubmittedReview {
+        number: u64,
+        action: ReviewAction,
+        res: Result<String>,
+    },
+    /// PR ビューから説明を更新した結果
+    EditedBody {
+        number: u64,
+        res: Result<String>,
+    },
     /// review を依頼した結果. targets は依頼した相手
     RequestedReviews {
         number: u64,
@@ -114,6 +129,20 @@ pub enum Effect {
     },
     /// repo のラベル一覧をスレッドで取る
     FetchLabels,
+    /// PR の説明とコメントをスレッドで取る
+    FetchConversation(u64),
+    /// PR にレビュー (承認かコメント) を送る
+    SubmitReview {
+        number: u64,
+        action: ReviewAction,
+        body: String,
+    },
+    /// PR の説明を body に書き換える. GitHub 側の説明が original から変わっていれば書き換えない
+    EditBody {
+        number: u64,
+        original: String,
+        body: String,
+    },
     /// PR のラベルを付け外す
     EditLabels {
         number: u64,

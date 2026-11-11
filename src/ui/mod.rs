@@ -12,6 +12,7 @@ mod copy;
 mod detail;
 pub mod format;
 mod label;
+mod pr_view;
 mod reviewer;
 mod table;
 
@@ -20,6 +21,7 @@ use copy::draw_copy_menu;
 use detail::detail_view;
 use format::ago;
 use label::draw_label_menu;
+use pr_view::draw_pr_view;
 use reviewer::draw_reviewer_menu;
 use table::draw_table;
 
@@ -88,6 +90,10 @@ pub(super) fn popup_area(area: Rect, rows: u16) -> Rect {
 pub fn draw(f: &mut Frame, state: &mut AppState) {
     if state.chat.is_some() {
         draw_chat(f, state);
+        return;
+    }
+    if state.pr_view.is_some() {
+        draw_pr_view(f, state);
         return;
     }
     // タブは設定で増えるので, ヘッダとは別の行に並べて切れないようにする
@@ -229,6 +235,7 @@ fn footer_line(state: &AppState) -> Line<'static> {
         ("XX", "close"),
         ("R", "review 依頼"),
         ("a", "ラベル"),
+        ("p", "説明とコメント"),
         ("d", "diff"),
         ("o", "ブラウザ"),
         ("l", "Linear"),
@@ -242,6 +249,7 @@ fn footer_line(state: &AppState) -> Line<'static> {
     const REVIEW: &[(&str, &str)] = &[
         ("Enter", "checkout"),
         ("c", "コピー"),
+        ("p", "説明とコメント"),
         ("d", "diff"),
         ("o", "ブラウザ"),
         ("l", "Linear"),
@@ -285,7 +293,8 @@ mod tests {
 
     use super::*;
     use crate::app::Tab;
-    use crate::app::{LabelMenu, ReviewerMenu};
+    use crate::app::{LabelMenu, PrView, ReviewerMenu};
+    use crate::domain::conversation::{Comment, Conversation, Entry, Verdict};
     use crate::domain::copy::copy_items;
     use crate::domain::devin::DevinConfig;
     use crate::domain::label::Label;
@@ -383,6 +392,8 @@ mod tests {
                 token: "t".into(),
                 org: "org-1".into(),
             }),
+            approve_body: None,
+            editor: None,
         }
     }
 
@@ -783,5 +794,91 @@ mod tests {
         let mut s = state();
         s.copy_menu = Some(copy_items(s.selected().unwrap(), Some("acme")));
         insta::assert_snapshot!(screen(&terminal(&mut s)));
+    }
+
+    fn comment(author: &str, at: DateTime<Utc>, body: &str) -> Comment {
+        Comment {
+            author: author.into(),
+            created_at: at,
+            body: body.into(),
+        }
+    }
+
+    /// 説明, コメント, 承認, 変更要求, 未解決と outdated で解決済みのスレッドを並べる
+    fn conversation() -> Conversation {
+        Conversation::new(
+            "katshun".into(),
+            days_ago(3),
+            "<!-- テンプレート -->\n## 概要\n土台を足す\n\n```rust\n# not heading\n```\n> 引用"
+                .into(),
+            vec![
+                Entry::Comment(comment("bob", days_ago(2), "見ます")),
+                Entry::Thread {
+                    path: "src/a.rs".into(),
+                    line: Some(12),
+                    resolved: false,
+                    outdated: false,
+                    comments: vec![
+                        comment("alice", hours_ago(20), "ここは?"),
+                        comment("katshun", hours_ago(19), "直す"),
+                    ],
+                },
+                Entry::Review {
+                    verdict: Verdict::ChangesRequested,
+                    comment: comment("alice", hours_ago(18), "直して"),
+                },
+                Entry::Thread {
+                    path: "src/b.rs".into(),
+                    line: Some(3),
+                    resolved: true,
+                    outdated: true,
+                    comments: vec![comment("carol", hours_ago(10), "古い")],
+                },
+                Entry::Review {
+                    verdict: Verdict::Approved,
+                    comment: comment("carol", hours_ago(2), ""),
+                },
+            ],
+            3,
+        )
+    }
+
+    #[test]
+    fn pr_view() {
+        let mut s = state();
+        let mut p = Pr::fixture(1, "feature/base", "main");
+        p.title = "ABC-1 土台を足す".into();
+        p.author = "katshun".into();
+        let mut view = PrView::new(&p);
+        view.conversation = Some(conversation());
+        view.fetching = false;
+        s.pr_view = Some(view);
+        let term = terminal(&mut s);
+        insta::assert_snapshot!(screen(&term));
+        insta::assert_snapshot!("pr_view_styles", styles(&term));
+        let v = s.pr_view.as_ref().unwrap();
+        // 2 行のヘッダの下の 27 行の欄に 28 行なので, 最後の 1 行はスクロールで出す
+        assert_eq!((v.viewport_height, v.max_scroll), (27, 1));
+    }
+
+    #[test]
+    fn pr_view_loading_and_error() {
+        let mut s = state();
+        let mut p = Pr::fixture(1, "feature/base", "main");
+        p.title = "ABC-1 土台を足す".into();
+        p.author = "katshun".into();
+        p.is_draft = true;
+        s.pr_view = Some(PrView::new(&p));
+        let rows = screen(&terminal(&mut s));
+        let rows: Vec<&str> = rows.lines().collect();
+        // 件数は取得してから出す
+        assert_eq!(rows[0].trim_end(), " #1  ABC-1 土台を足す  Draft");
+        assert_eq!(rows[1].trim_end(), " katshun  feature/base → main");
+        assert_eq!(rows[2], "取得中…");
+
+        let v = s.pr_view.as_mut().unwrap();
+        v.fetching = false;
+        v.error = Some("取得失敗: boom".into());
+        assert_eq!(footer(&mut s), " 取得失敗: boom");
     }
 }

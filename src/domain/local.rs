@@ -20,6 +20,11 @@ pub struct LocalState {
     pub devin: Option<DevinConfig>,
     /// git config `prtui.tab` の値. 自分タブとレビュータブの後ろに足すタブ
     pub tabs: Vec<TabQuery>,
+    /// git config `prtui.approve-body` の値. PR ビューで承認するときのエディタの初期値 (`LGTM 👍` など)
+    pub approve_body: Option<String>,
+    /// git config `prtui.editor` の値. Devin への送信 (`e`) と PR ビューのレビューで本文を書くエディタ.
+    /// 未設定なら `$VISUAL`, `$EDITOR`, vi の順に使う
+    pub editor: Option<String>,
 }
 
 /// 追加のタブ 1 つ分. git config `prtui.tab` に `名前=検索クエリ` で書く

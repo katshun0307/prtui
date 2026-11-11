@@ -1,7 +1,8 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
+use crate::domain::conversation::{Conversation, ReviewAction, same_body};
 use crate::domain::label::Label;
 use crate::domain::linear::{REVIEW_LINK_MARK, extract_review_url};
 use crate::domain::op::PrOp;
@@ -9,10 +10,10 @@ use crate::domain::pr::Pr;
 use crate::domain::review::arrange_reviews;
 use crate::domain::stack::{arrange, arrange_flat};
 use crate::infra::graphql::{
-    QUERY, QUERY_CUSTOM, QUERY_ONE, QUERY_REVIEW, parse_custom, parse_one, parse_review,
-    parse_search,
+    QUERY, QUERY_CONVERSATION, QUERY_CUSTOM, QUERY_ONE, QUERY_REVIEW, parse_conversation,
+    parse_custom, parse_one, parse_review, parse_search,
 };
-use crate::infra::process::run;
+use crate::infra::process::{run, run_with_stdin};
 
 pub fn repo_name(dir: &Path) -> Result<String> {
     run(
@@ -55,6 +56,34 @@ pub fn fetch_custom(dir: &Path, repo: &str, query: &str) -> Result<Vec<Pr>> {
 pub fn fetch_pr(dir: &Path, repo: &str, number: u64) -> Result<Option<Pr>> {
     let out = gh(dir, &fetch_pr_args(repo, number)?)?;
     parse_one(&out)
+}
+
+/// PR ビューに出す説明とコメント. open でない PR も取れる
+pub fn fetch_conversation(dir: &Path, repo: &str, number: u64) -> Result<Conversation> {
+    let out = gh(dir, &pr_query_args(QUERY_CONVERSATION, repo, number)?)?;
+    parse_conversation(&out)
+}
+
+/// PR にレビュー (承認かコメント) を送る
+pub fn submit_review(dir: &Path, number: u64, action: ReviewAction, body: &str) -> Result<String> {
+    gh(dir, &submit_review_args(number, action, body))
+}
+
+/// PR の説明を body に書き換える. 編集中に他の人が書き換えた内容を消さないよう,
+/// 直前に取り直した説明が original と違えば書き換えない (GitHub の API に楽観ロックが無いため).
+/// 本文は長く改行を含むので argv ではなく stdin で渡す
+pub fn edit_body(dir: &Path, number: u64, original: &str, body: &str) -> Result<String> {
+    let current = gh(dir, &view_body_args(number))?;
+    if !same_body(&current, original) {
+        bail!("編集中に GitHub 側で説明が変わった. r で取り直してからやり直す");
+    }
+    let args = edit_body_args(number);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = run_with_stdin(dir, "gh", &args, body)?;
+    if !out.status.success() {
+        bail!("gh pr: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// PR ブランチに base (main) を merge commit で取り込む. merge は GitHub 側で非同期に行われる.
@@ -167,14 +196,19 @@ fn fetch_custom_args(repo: &str, query: &str) -> Vec<String> {
     ]
 }
 
-/// number は GraphQL の Int なので `-F` で型付きで渡す
 fn fetch_pr_args(repo: &str, number: u64) -> Result<Vec<String>> {
+    pr_query_args(QUERY_ONE, repo, number)
+}
+
+/// owner, name, number を変数に取る PR 1 件のクエリ.
+/// number は GraphQL の Int なので `-F` で型付きで渡す
+fn pr_query_args(query: &str, repo: &str, number: u64) -> Result<Vec<String>> {
     let (owner, name) = split_repo(repo)?;
     Ok(vec![
         "api".into(),
         "graphql".into(),
         "-f".into(),
-        format!("query={QUERY_ONE}"),
+        format!("query={query}"),
         "-f".into(),
         format!("owner={owner}"),
         "-f".into(),
@@ -248,6 +282,36 @@ fn change_state_args(number: u64, op: PrOp) -> Vec<String> {
         PrOp::Draft => strings(["pr", "ready", &n, "--undo"]),
         PrOp::Close => strings(["pr", "close", &n]),
     }
+}
+
+fn view_body_args(number: u64) -> Vec<String> {
+    strings([
+        "pr",
+        "view",
+        &number.to_string(),
+        "--json",
+        "body",
+        "--jq",
+        ".body",
+    ])
+}
+
+/// 本文は stdin から読ませる
+fn edit_body_args(number: u64) -> Vec<String> {
+    strings(["pr", "edit", &number.to_string(), "--body-file", "-"])
+}
+
+/// 承認は本文が空なら `--body` を付けない
+fn submit_review_args(number: u64, action: ReviewAction, body: &str) -> Vec<String> {
+    let flag = match action {
+        ReviewAction::Approve => "--approve",
+        ReviewAction::Comment => "--comment",
+    };
+    let mut args = strings(["pr", "review", &number.to_string(), flag]);
+    if !body.is_empty() {
+        args.extend(["--body".into(), body.into()]);
+    }
+    args
 }
 
 fn request_reviews_args(number: u64, targets: &[String]) -> Vec<String> {
@@ -327,6 +391,42 @@ mod tests {
         let args = fetch_pr_args("o/r", 42).unwrap();
         assert!(args[3].starts_with("query="));
         assert!(args[3].contains("fragment pr on PullRequest"));
+        assert_eq!(field(&args, "owner"), "o");
+        assert_eq!(field(&args, "name"), "r");
+        assert_eq!(args[args.len() - 2..], ["-F", "number=42"]);
+    }
+
+    #[test]
+    fn submit_review_flags() {
+        assert_eq!(
+            submit_review_args(3, ReviewAction::Approve, ""),
+            ["pr", "review", "3", "--approve"]
+        );
+        assert_eq!(
+            submit_review_args(3, ReviewAction::Approve, "LGTM"),
+            ["pr", "review", "3", "--approve", "--body", "LGTM"]
+        );
+        assert_eq!(
+            submit_review_args(3, ReviewAction::Comment, "a\nb"),
+            ["pr", "review", "3", "--comment", "--body", "a\nb"]
+        );
+    }
+
+    #[test]
+    fn edit_body_reads_stdin() {
+        assert_eq!(
+            view_body_args(3),
+            ["pr", "view", "3", "--json", "body", "--jq", ".body"]
+        );
+        assert_eq!(edit_body_args(3), ["pr", "edit", "3", "--body-file", "-"]);
+    }
+
+    #[test]
+    fn conversation_by_owner_name_number() {
+        let args = pr_query_args(QUERY_CONVERSATION, "o/r", 42).unwrap();
+        assert!(args[3].starts_with("query="));
+        assert!(args[3].contains("reviewThreads"));
+        assert!(!args[3].contains("fragment pr on PullRequest"));
         assert_eq!(field(&args, "owner"), "o");
         assert_eq!(field(&args, "name"), "r");
         assert_eq!(args[args.len() - 2..], ["-F", "number=42"]);

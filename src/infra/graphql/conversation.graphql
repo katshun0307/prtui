@@ -1,0 +1,12 @@
+query($owner:String!, $name:String!, $number:Int!) {
+  repository(owner:$owner, name:$name) { pullRequest(number:$number) {
+    body createdAt
+    author { login }
+    comments(last:100) { totalCount nodes { author { login } createdAt body } }
+    reviews(last:100) { totalCount nodes { state submittedAt createdAt body author { login } } }
+    reviewThreads(last:100) { totalCount nodes {
+      isResolved isOutdated path line originalLine
+      comments(first:100) { nodes { author { login } createdAt body } }
+    } }
+  } }
+}

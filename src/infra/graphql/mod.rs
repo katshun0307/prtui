@@ -6,13 +6,14 @@ use std::collections::HashSet;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 
+use crate::domain::conversation::{Comment, Conversation, Entry, Verdict};
 use crate::domain::label::Label;
 use crate::domain::pr::{Check, CheckState, MyReview, Pr, Reviewer, ReviewerState};
 
-pub(crate) use query::{QUERY, QUERY_CUSTOM, QUERY_ONE, QUERY_REVIEW};
+pub(crate) use query::{QUERY, QUERY_CONVERSATION, QUERY_CUSTOM, QUERY_ONE, QUERY_REVIEW};
 use raw::{
-    Context_, CustomResponse, OneResponse, RawPr, RequestedReviewer, Response, Review,
-    ReviewRequest, ReviewResponse,
+    CommentNode, Context_, ConversationResponse, CustomResponse, OneResponse, RawPr,
+    RequestedReviewer, Response, Review, ReviewRequest, ReviewResponse,
 };
 
 /// author / assignee の検索結果を解析し, Pr に変換して番号で重複を除く. 並べ替えはしない
@@ -288,6 +289,79 @@ fn convert_check(c: Context_) -> Check {
     }
 }
 
+/// PR ビューの説明とコメントを解析する. 未提出のレビューと, 本文の無いコメントだけのレビュー
+/// (行へのコメントの入れ物. 中身はスレッドに出す) は除く. PR が無ければエラー
+pub(crate) fn parse_conversation(json: &str) -> Result<Conversation> {
+    let resp: ConversationResponse =
+        serde_json::from_str(json).context("GraphQL レスポンスの解析に失敗")?;
+    let r = resp
+        .data
+        .repository
+        .pull_request
+        .context("PR が見つからない")?;
+    let omitted = [
+        r.comments
+            .total_count
+            .saturating_sub(r.comments.nodes.len()),
+        r.reviews.total_count.saturating_sub(r.reviews.nodes.len()),
+        r.review_threads
+            .total_count
+            .saturating_sub(r.review_threads.nodes.len()),
+    ]
+    .iter()
+    .sum();
+    let comments = r
+        .comments
+        .nodes
+        .into_iter()
+        .map(|c| Entry::Comment(comment(c)));
+    let reviews = r.reviews.nodes.into_iter().filter_map(|v| {
+        let verdict = Verdict::parse(&v.state)?;
+        if verdict == Verdict::Commented && v.body.trim().is_empty() {
+            return None;
+        }
+        Some(Entry::Review {
+            verdict,
+            comment: Comment {
+                author: login(v.author),
+                created_at: v.submitted_at.unwrap_or(v.created_at),
+                body: v.body,
+            },
+        })
+    });
+    let threads = r.review_threads.nodes.into_iter().map(|t| Entry::Thread {
+        line: if t.is_outdated {
+            t.original_line
+        } else {
+            t.line.or(t.original_line)
+        },
+        path: t.path,
+        resolved: t.is_resolved,
+        outdated: t.is_outdated,
+        comments: t.comments.nodes.into_iter().map(comment).collect(),
+    });
+    Ok(Conversation::new(
+        login(r.author),
+        r.created_at,
+        r.body,
+        comments.chain(reviews).chain(threads).collect(),
+        omitted,
+    ))
+}
+
+/// 削除されたユーザーは GitHub の表示に合わせて `ghost`
+fn login(l: Option<raw::Login>) -> String {
+    l.map_or_else(|| "ghost".into(), |l| l.login)
+}
+
+fn comment(c: CommentNode) -> Comment {
+    Comment {
+        author: login(c.author),
+        created_at: c.created_at,
+        body: c.body,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::raw::ReviewAuthor;
@@ -515,6 +589,70 @@ mod tests {
         assert!(parse_one(&one("CLOSED")).unwrap().is_none());
         let missing = r#"{"data":{"repository":{"pullRequest":null}}}"#;
         assert!(parse_one(missing).unwrap().is_none());
+    }
+
+    #[test]
+    fn parse_conversation_merges_and_filters() {
+        let json = r#"{"data":{"repository":{"pullRequest":{
+          "body":"説明","createdAt":"2026-11-01T00:00:00Z","author":{"login":"me"},
+          "comments":{"totalCount":102,"nodes":[
+            {"author":null,"createdAt":"2026-11-01T03:00:00Z","body":"消えた人"},
+            {"author":{"login":"bob"},"createdAt":"2026-11-01T01:00:00Z","body":"c1"}
+          ]},
+          "reviews":{"totalCount":4,"nodes":[
+            {"state":"APPROVED","submittedAt":"2026-11-01T05:00:00Z","createdAt":"2026-11-01T04:00:00Z","body":"","author":{"login":"alice"}},
+            {"state":"COMMENTED","submittedAt":"2026-11-01T02:00:00Z","createdAt":"2026-11-01T02:00:00Z","body":" ","author":{"login":"alice"}},
+            {"state":"COMMENTED","submittedAt":"2026-11-01T02:30:00Z","createdAt":"2026-11-01T02:30:00Z","body":"総評","author":{"login":"carol"}},
+            {"state":"PENDING","submittedAt":null,"createdAt":"2026-11-01T06:00:00Z","body":"下書き","author":{"login":"me"}}
+          ]},
+          "reviewThreads":{"totalCount":2,"nodes":[
+            {"isResolved":false,"isOutdated":false,"path":"src/a.rs","line":12,"originalLine":10,
+             "comments":{"nodes":[{"author":{"login":"alice"},"createdAt":"2026-11-01T02:00:00Z","body":"ここ"}]}},
+            {"isResolved":true,"isOutdated":true,"path":"src/b.rs","line":null,"originalLine":7,
+             "comments":{"nodes":[{"author":{"login":"carol"},"createdAt":"2026-11-01T00:30:00Z","body":"古い"}]}}
+          ]}
+        }}}}"#;
+        let c = parse_conversation(json).unwrap();
+        assert_eq!((c.author.as_str(), c.body.as_str()), ("me", "説明"));
+        assert_eq!(c.omitted, 100);
+        let summary: Vec<String> = c
+            .entries
+            .iter()
+            .map(|e| match e {
+                Entry::Comment(c) => format!("comment {} {}", c.author, c.body),
+                Entry::Review { verdict, comment } => {
+                    format!("review {} {verdict:?} {}", comment.author, comment.body)
+                }
+                Entry::Thread {
+                    path,
+                    line,
+                    resolved,
+                    outdated,
+                    comments,
+                } => format!(
+                    "thread {path}:{line:?} {resolved} {outdated} {}",
+                    comments.len()
+                ),
+            })
+            .collect();
+        // 本文の無い COMMENTED と PENDING は除き, 時刻順. APPROVED は submittedAt で並ぶ
+        assert_eq!(
+            summary,
+            vec![
+                "thread src/b.rs:Some(7) true true 1",
+                "comment bob c1",
+                "thread src/a.rs:Some(12) false false 1",
+                "review carol Commented 総評",
+                "comment ghost 消えた人",
+                "review alice Approved ",
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_conversation_missing_pr_is_error() {
+        let json = r#"{"data":{"repository":{"pullRequest":null}}}"#;
+        assert!(parse_conversation(json).is_err());
     }
 
     /// 所属チームが取れれば依頼されているチームをそれで絞り, 依頼時刻もそのチームだけで見る

@@ -16,6 +16,7 @@ mod chat;
 mod event;
 mod label;
 mod picker;
+mod pr_view;
 mod reviewer;
 
 pub use event::handle_event;
@@ -80,6 +81,9 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
     }
     if state.chat.is_some() {
         return chat::chat_key(state, key);
+    }
+    if state.pr_view.is_some() {
+        return pr_view::pr_view_key(state, key);
     }
     // 前の操作の結果はキーを押したら消し, フッターをキー案内に戻す
     state.message = None;
@@ -181,6 +185,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('l') => open_linear(state),
         KeyCode::Char('L') => open_linear_review(state),
         KeyCode::Char('v') => chat::open_chat(state),
+        KeyCode::Char('p') => pr_view::open_pr_view(state),
         KeyCode::Char('V') if state.tab.is_readonly() => state
             .selected()
             .map(|p| Effect::OpenUrl(review_url(&state.repo, p.number)))

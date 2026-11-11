@@ -67,5 +67,7 @@ pub fn read_local_state(dir: &Path) -> Result<LocalState> {
             .zip(config("prtui.devin-org"))
             .map(|(token, org)| DevinConfig { token, org }),
         tabs,
+        approve_body: config("prtui.approve-body"),
+        editor: config("prtui.editor"),
     })
 }

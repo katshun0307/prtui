@@ -7,6 +7,7 @@ mod update;
 
 pub use event::Action;
 pub use runtime::App;
+pub use state::PrView;
 pub use state::{AppState, Tab};
 /// ui の snapshot がラベルと review 依頼の選択画面を開いた状態を作るのに使う
 #[cfg(test)]
