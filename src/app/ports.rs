@@ -10,6 +10,7 @@ use chrono::{DateTime, Utc};
 use crate::domain::cache::Cache;
 use crate::domain::conversation::{Conversation, ReviewAction};
 use crate::domain::devin::{DevinConfig, DevinMessage, DevinSession};
+use crate::domain::diff::Diff;
 use crate::domain::label::Label;
 use crate::domain::local::LocalState;
 use crate::domain::merge::{MergeMethod, MergeOutcome, MergeSettings};
@@ -27,6 +28,10 @@ pub trait Github: Send + Sync + 'static {
     fn fetch_pr(&self, number: u64) -> Result<Option<Pr>>;
     /// PR ビューの説明とコメント. open でない PR も取れる
     fn fetch_conversation(&self, number: u64) -> Result<Conversation>;
+    /// PR ビューの diff. open でない PR も取れる
+    fn fetch_diff(&self, number: u64) -> Result<Diff>;
+    /// 行へのスレッドを解決する. resolve が false なら未解決に戻す
+    fn resolve_thread(&self, id: &str, resolve: bool) -> Result<()>;
     fn submit_review(&self, number: u64, action: ReviewAction, body: &str) -> Result<String>;
     /// 説明を body に書き換える. GitHub 側の説明が original から変わっていればエラーにして書き換えない
     fn edit_body(&self, number: u64, original: &str, body: &str) -> Result<String>;
@@ -116,6 +121,7 @@ pub(crate) mod fake {
     use crate::domain::cache::Cache;
     use crate::domain::conversation::{Conversation, ReviewAction};
     use crate::domain::devin::{DevinConfig, DevinMessage, DevinSession};
+    use crate::domain::diff::Diff;
     use crate::domain::label::Label;
     use crate::domain::local::LocalState;
     use crate::domain::merge::{MergeMethod, MergeOutcome, MergeSettings};
@@ -135,11 +141,12 @@ pub(crate) mod fake {
         /// `fetch_pr` が順に返す結果. 最後の 1 つは使い切らずに返し続ける. 空なら Ok(None)
         pub pr: Mutex<VecDeque<Result<Option<Pr>, String>>>,
         /// update_branch, checkout, change_state, request_reviews, view_web, edit_labels,
-        /// submit_review, edit_body の結果
+        /// submit_review, edit_body, resolve_thread の結果
         pub op: Mutex<Result<String, String>>,
         pub linear: Mutex<Result<Option<String>, String>>,
         pub labels: Mutex<Result<Vec<Label>, String>>,
         pub conversation: Mutex<Result<Conversation, String>>,
+        pub diff: Mutex<Result<Diff, String>>,
         pub merge_settings: Mutex<Result<MergeSettings, String>>,
         pub merge: Mutex<Result<MergeOutcome, String>>,
     }
@@ -156,6 +163,7 @@ pub(crate) mod fake {
                 linear: Mutex::new(Ok(None)),
                 labels: Mutex::new(Ok(vec![])),
                 conversation: Mutex::new(Err("説明とコメントが未設定".into())),
+                diff: Mutex::new(Err("diff が未設定".into())),
                 merge_settings: Mutex::new(Ok(MergeSettings::new(
                     MergeMethod::ALL.to_vec(),
                     Some(MergeMethod::Squash),
@@ -205,6 +213,16 @@ pub(crate) mod fake {
         fn fetch_conversation(&self, number: u64) -> Result<Conversation> {
             self.record(format!("fetch_conversation {number}"));
             cloned(&self.conversation)
+        }
+
+        fn fetch_diff(&self, number: u64) -> Result<Diff> {
+            self.record(format!("fetch_diff {number}"));
+            cloned(&self.diff)
+        }
+
+        fn resolve_thread(&self, id: &str, resolve: bool) -> Result<()> {
+            self.record(format!("resolve_thread {id} {resolve}"));
+            cloned(&self.op).map(drop)
         }
 
         fn submit_review(&self, number: u64, action: ReviewAction, body: &str) -> Result<String> {

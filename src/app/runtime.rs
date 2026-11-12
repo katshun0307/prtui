@@ -166,6 +166,22 @@ impl App {
                 Effect::FetchConversation(n) => {
                     self.spawn(move |p| Event::FetchedConversation(n, p.gh.fetch_conversation(n)))
                 }
+                Effect::FetchDiff(n) => {
+                    self.spawn(move |p| Event::FetchedDiff(n, p.gh.fetch_diff(n)))
+                }
+                Effect::ResolveThread {
+                    number,
+                    id,
+                    resolve,
+                } => self.spawn(move |p| {
+                    let res = p.gh.resolve_thread(&id, resolve);
+                    Event::ResolvedThread {
+                        number,
+                        id,
+                        resolve,
+                        res,
+                    }
+                }),
                 Effect::SubmitReview {
                     number,
                     action,
@@ -683,6 +699,43 @@ mod tests {
         let v = a.state.pr_view.as_ref().unwrap();
         assert!(!v.saving_body);
         assert_eq!(v.notice.as_deref(), Some("#1 の説明を更新した"));
+    }
+
+    #[test]
+    fn fetch_diff_fills_pr_view() {
+        let f = Fakes::default();
+        let mut a = app(&f);
+        *f.gh.diff.lock().unwrap() = Ok(crate::domain::diff::Diff::parse(
+            "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-x\n+y\n",
+        ));
+        let mut view = crate::app::state::PrView::new(&pr(1));
+        view.diff.fetching = true;
+        a.state.pr_view = Some(view);
+        a.perform(vec![Effect::FetchDiff(1)]);
+        a.pump_blocking(1);
+        assert_eq!(f.gh.calls(), vec!["fetch_diff 1"]);
+        let v = a.state.pr_view.as_ref().unwrap();
+        assert!(!v.diff.fetching);
+        assert_eq!(v.diff.diff.as_ref().map(|d| d.totals()), Some((1, 1)));
+    }
+
+    #[test]
+    fn resolve_thread_reports_to_pr_view() {
+        let f = Fakes::default();
+        let mut a = app(&f);
+        let mut view = crate::app::state::PrView::new(&pr(1));
+        view.resolving = true;
+        a.state.pr_view = Some(view);
+        a.perform(vec![Effect::ResolveThread {
+            number: 1,
+            id: "T1".into(),
+            resolve: true,
+        }]);
+        a.pump_blocking(1);
+        assert_eq!(f.gh.calls(), vec!["resolve_thread T1 true"]);
+        let v = a.state.pr_view.as_ref().unwrap();
+        assert!(!v.resolving);
+        assert_eq!(v.notice.as_deref(), Some("スレッドを解決した"));
     }
 
     #[test]

@@ -1,15 +1,16 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
 use super::format::ago;
 use super::{DIM, SELECTED_BG};
-use crate::app::{AppState, PrView};
+use crate::app::{AppState, PrPage, PrView};
 use crate::domain::conversation::{Comment, Conversation, Entry, Verdict, tidy_body};
+use crate::domain::diff::{Diff, DiffLine, FileDiff, FileStatus, LineKind, Row};
 
-/// PR ビュー (説明とコメント) を全画面に描く. scroll の上限と欄の高さを `PrView` に書く
+/// PR ビュー (説明とコメントか diff) を全画面に描く. scroll の上限と欄の高さを `PrView` に書く
 pub(super) fn draw_pr_view(f: &mut Frame, state: &mut AppState) {
     let Some(view) = state.pr_view.as_mut() else {
         return;
@@ -27,19 +28,117 @@ pub(super) fn draw_pr_view(f: &mut Frame, state: &mut AppState) {
         header,
     );
 
-    let lines = match &view.conversation {
-        Some(c) => conversation_lines(c, body.width),
-        None if view.fetching => vec![Line::from(Span::raw("取得中…").fg(DIM))],
-        None => vec![],
-    };
-    let para = Paragraph::new(lines).wrap(Wrap { trim: false });
-    let total = para.line_count(body.width);
-    view.max_scroll = total.saturating_sub(body.height as usize);
     view.viewport_height = body.height;
-    let offset = view.scroll.min(view.max_scroll);
-    f.render_widget(para.scroll((offset.min(u16::MAX as usize) as u16, 0)), body);
+    match view.page {
+        PrPage::Conversation => draw_conversation(f, view, body),
+        PrPage::Diff => draw_diff(f, view, body),
+    }
 
     f.render_widget(footer_line(view), footer);
+}
+
+/// 折り返した後の行で, スレッドの見出しの位置を `thread_rows` に書く (`]`/`[` で飛ぶ先)
+fn draw_conversation(f: &mut Frame, view: &mut PrView, body: Rect) {
+    let (lines, thread_lines) = match &view.conversation {
+        Some(c) => conversation_lines(c, body.width, view.thread.as_deref()),
+        None if view.fetching => (vec![Line::from(Span::raw("取得中…").fg(DIM))], vec![]),
+        None => (vec![], vec![]),
+    };
+    // 折り返しは行ごとなので, 1 行ずつの高さを足せば全体と各行の位置になる
+    let mut starts = Vec::with_capacity(lines.len());
+    let mut total = 0;
+    for l in &lines {
+        starts.push(total);
+        total += Paragraph::new(l.clone())
+            .wrap(Wrap { trim: false })
+            .line_count(body.width);
+    }
+    view.thread_rows = thread_lines.iter().map(|&i| starts[i]).collect();
+    let para = Paragraph::new(lines).wrap(Wrap { trim: false });
+    view.max_scroll = total.saturating_sub(body.height as usize);
+    let offset = view.scroll.min(view.max_scroll);
+    f.render_widget(para.scroll((offset.min(u16::MAX as usize) as u16, 0)), body);
+}
+
+/// diff は折り返さない. 行の位置がずれずファイルの見出しへ飛べるようにするため.
+/// 長い行は `h`/`l` で横に送る. ファイルの見出しは横に送らない. 大きな diff でも重くならないよう,
+/// 見えている行だけを作る
+fn draw_diff(f: &mut Frame, view: &mut PrView, body: Rect) {
+    let page = &mut view.diff;
+    let Some(d) = &page.diff else {
+        let text = if page.fetching { "取得中…" } else { "" };
+        f.render_widget(Line::from(Span::raw(text).fg(DIM)), body);
+        return;
+    };
+    if d.files.is_empty() {
+        f.render_widget(Line::from(Span::raw("差分なし").fg(DIM)), body);
+        return;
+    }
+    page.max_scroll = d.row_count().saturating_sub(body.height as usize);
+    let offset = page.scroll.min(page.max_scroll);
+    let rows: Vec<Row> = d.rows().skip(offset).take(body.height as usize).collect();
+
+    let lines: Vec<Line> = rows
+        .iter()
+        .map(|r| match r {
+            Row::Line(l) => diff_line(l),
+            Row::File(_) | Row::Blank => Line::default(),
+        })
+        .collect();
+    let widest = lines.iter().map(Line::width).max().unwrap_or(0);
+    page.max_x = widest.saturating_sub(body.width as usize);
+    let x = page.x.min(page.max_x);
+    f.render_widget(
+        Paragraph::new(lines).scroll((0, x.min(u16::MAX as usize) as u16)),
+        body,
+    );
+    for (i, r) in rows.iter().enumerate() {
+        if let Row::File(file) = r {
+            let area = Rect {
+                y: body.y + i as u16,
+                height: 1,
+                ..body
+            };
+            f.render_widget(file_rule(file, body.width), area);
+        }
+    }
+}
+
+/// `── <path>  <状態>  +n -m ───…`. rename は `old → new`
+fn file_rule(file: &FileDiff, width: u16) -> Line<'static> {
+    let mut spans = Vec::new();
+    if let Some(old) = &file.old_path {
+        spans.push(Span::raw(old.clone()).bold());
+        spans.push(Span::raw(" → ").fg(DIM));
+    }
+    spans.push(Span::raw(file.path.clone()).bold());
+    match file.status {
+        FileStatus::Added => spans.push(Span::raw("  新規").green()),
+        FileStatus::Deleted => spans.push(Span::raw("  削除").red()),
+        FileStatus::Renamed | FileStatus::Modified => {}
+    }
+    if file.binary {
+        spans.push(Span::raw("  バイナリ").fg(DIM));
+    }
+    // rename だけやバイナリでは行の増減が無いので出さない
+    if file.additions + file.deletions > 0 {
+        spans.push(Span::raw(format!("  +{}", file.additions)).green());
+        spans.push(Span::raw(format!(" -{}", file.deletions)).red());
+    }
+    rule(spans, width)
+}
+
+/// 追加は green, 削除は red, hunk の見出しは cyan. タブは幅が定まらないので空白 4 つにする
+fn diff_line(l: &DiffLine) -> Line<'static> {
+    let text = l.text.replace('\t', "    ");
+    let span = Span::raw(text);
+    Line::from(match l.kind {
+        LineKind::Add => span.green(),
+        LineKind::Del => span.red(),
+        LineKind::Hunk => span.cyan(),
+        LineKind::Note => span.fg(DIM),
+        LineKind::Context => span,
+    })
 }
 
 /// 1 行目に ` #<番号>  <title>  [Draft]`, 2 行目に author, ブランチと, 取得後は書き込みの件数
@@ -58,6 +157,15 @@ fn header_lines(view: &PrView) -> Vec<Line<'static>> {
         Span::raw(" → ").fg(DIM),
         Span::raw(view.base.clone()).cyan(),
     ];
+    match view.page {
+        PrPage::Conversation => conversation_counts(view, &mut info),
+        PrPage::Diff => diff_counts(view.diff.diff.as_ref(), &mut info),
+    }
+    vec![Line::from(title), Line::from(info)]
+}
+
+/// 説明とコメントのページ. 取得後に書き込みの件数
+fn conversation_counts(view: &PrView, info: &mut Vec<Span<'static>>) {
     if let Some(c) = &view.conversation {
         let (comments, reviews, threads, open) = c.counts();
         info.push(
@@ -70,11 +178,26 @@ fn header_lines(view: &PrView) -> Vec<Line<'static>> {
             info.push(Span::raw(format!(" (未解決 {open})")).yellow());
         }
     }
-    vec![Line::from(title), Line::from(info)]
 }
 
-/// 説明を先頭に, 書き込みを古い順に並べる. 各書き込みは見出しの罫線で区切る
-fn conversation_lines(c: &Conversation, width: u16) -> Vec<Line<'static>> {
+/// diff のページ. 取得後にファイル数と追加, 削除の行数
+fn diff_counts(diff: Option<&Diff>, info: &mut Vec<Span<'static>>) {
+    info.push(Span::raw("  diff").bold());
+    if let Some(d) = diff {
+        let (add, del) = d.totals();
+        info.push(Span::raw(format!("  {} ファイル", d.files.len())).fg(DIM));
+        info.push(Span::raw(format!("  +{add}")).green());
+        info.push(Span::raw(format!(" -{del}")).red());
+    }
+}
+
+/// 説明を先頭に, 書き込みを古い順に並べる. 各書き込みは見出しの罫線で区切る.
+/// 行と, スレッドの見出しの行の位置 (`Conversation::threads` の順) を返す. selected のスレッドの見出しは背景を付ける
+fn conversation_lines(
+    c: &Conversation,
+    width: u16,
+    selected: Option<&str>,
+) -> (Vec<Line<'static>>, Vec<usize>) {
     let mut lines = vec![rule(
         vec![
             Span::raw("説明").bold(),
@@ -99,14 +222,18 @@ fn conversation_lines(c: &Conversation, width: u16) -> Vec<Line<'static>> {
             .fg(DIM),
         ));
     }
+    let mut thread_lines = vec![];
     for e in &c.entries {
         lines.push(Line::default());
-        entry_lines(e, width, &mut lines);
+        if matches!(e, Entry::Thread { .. }) {
+            thread_lines.push(lines.len());
+        }
+        entry_lines(e, width, selected, &mut lines);
     }
-    lines
+    (lines, thread_lines)
 }
 
-fn entry_lines(e: &Entry, width: u16, lines: &mut Vec<Line<'static>>) {
+fn entry_lines(e: &Entry, width: u16, selected: Option<&str>, lines: &mut Vec<Line<'static>>) {
     match e {
         Entry::Comment(c) => {
             lines.push(rule(byline(c, Span::raw("コメント").fg(DIM)), width));
@@ -123,6 +250,7 @@ fn entry_lines(e: &Entry, width: u16, lines: &mut Vec<Line<'static>>) {
             lines.extend(body_lines(&comment.body, ""));
         }
         Entry::Thread {
+            id,
             path,
             line,
             resolved,
@@ -142,7 +270,12 @@ fn entry_lines(e: &Entry, width: u16, lines: &mut Vec<Line<'static>>) {
             if *outdated {
                 spans.push(Span::raw("  outdated").fg(DIM));
             }
-            lines.push(rule(spans, width));
+            let head = rule(spans, width);
+            lines.push(if selected == Some(id.as_str()) {
+                head.style(Style::new().bg(SELECTED_BG))
+            } else {
+                head
+            });
             // スレッド内の返信は罫線にせず, 字下げした名前の行で分ける
             for c in comments {
                 let mut by = vec![Span::raw("  ")];
@@ -215,6 +348,9 @@ fn footer_line(view: &PrView) -> Line<'static> {
     if view.saving_body {
         return Line::from(Span::raw(" 説明を更新中…").yellow());
     }
+    if view.resolving {
+        return Line::from(Span::raw(" スレッドを更新中…").yellow());
+    }
     if view.choosing_review {
         return Line::from(
             Span::raw(
@@ -224,7 +360,12 @@ fn footer_line(view: &PrView) -> Line<'static> {
             .bold(),
         );
     }
-    if view.fetching && view.conversation.is_some() {
+    // 初回の取得中は本文の欄に出すので, フッターに出すのは取り直しのときだけ
+    let refetching = match view.page {
+        PrPage::Conversation => view.fetching && view.conversation.is_some(),
+        PrPage::Diff => view.diff.fetching && view.diff.diff.is_some(),
+    };
+    if refetching {
         return Line::from(Span::raw(" 取得中…").yellow());
     }
     if let Some(e) = &view.error {
@@ -233,19 +374,36 @@ fn footer_line(view: &PrView) -> Line<'static> {
     if let Some(n) = &view.notice {
         return Line::from(Span::raw(format!(" {n}")).green());
     }
-    let keys = [
-        ("j/k", "スクロール"),
-        ("C-d/C-u", "半画面"),
-        ("Space", "1 画面"),
-        ("g/G", "先頭/末尾"),
-        ("!", "レビュー"),
-        ("e", "説明を編集"),
-        ("o", "ブラウザ"),
-        ("r", "更新"),
-        ("q", "戻る"),
-    ];
+    let keys: &[(&str, &str)] = match view.page {
+        PrPage::Conversation => &[
+            ("j/k", "スクロール"),
+            ("C-d/C-u", "半画面"),
+            ("Space", "1 画面"),
+            ("g/G", "先頭/末尾"),
+            ("]/[", "スレッド"),
+            ("x", "解決"),
+            ("d", "diff"),
+            ("!", "レビュー"),
+            ("e", "説明を編集"),
+            ("o", "ブラウザ"),
+            ("r", "更新"),
+            ("q", "戻る"),
+        ],
+        PrPage::Diff => &[
+            ("j/k", "スクロール"),
+            ("C-d/C-u", "半画面"),
+            ("g/G", "先頭/末尾"),
+            ("]/[", "次/前のファイル"),
+            ("h/l", "横"),
+            ("d", "説明とコメント"),
+            ("!", "レビュー"),
+            ("o", "ブラウザ"),
+            ("r", "更新"),
+            ("q", "戻る"),
+        ],
+    };
     let mut spans = vec![Span::raw(" ")];
-    for (key, label) in keys {
+    for &(key, label) in keys {
         spans.push(Span::raw(key).cyan());
         spans.push(Span::raw(format!(" {label}  ")).fg(DIM));
     }

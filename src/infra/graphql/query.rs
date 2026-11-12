@@ -33,6 +33,12 @@ pub(crate) const QUERY_ONE: &str = concat!(
 /// 書き込みは新しい側の 100 件ずつを取り, 取らなかった分は `totalCount` から数える
 pub(crate) const QUERY_CONVERSATION: &str = include_str!("conversation.graphql");
 
+/// PR ビューの `x`. 行へのスレッドを解決する. 変数は `id` (スレッドの node ID)
+pub(crate) const MUTATION_RESOLVE: &str = include_str!("resolve_thread.graphql");
+
+/// 解決済みのスレッドを未解決に戻す
+pub(crate) const MUTATION_UNRESOLVE: &str = include_str!("unresolve_thread.graphql");
+
 #[cfg(test)]
 mod tests {
     use apollo_compiler::{ExecutableDocument, Schema};
@@ -52,6 +58,8 @@ mod tests {
             ("QUERY_CUSTOM", QUERY_CUSTOM),
             ("QUERY_ONE", QUERY_ONE),
             ("QUERY_CONVERSATION", QUERY_CONVERSATION),
+            ("MUTATION_RESOLVE", MUTATION_RESOLVE),
+            ("MUTATION_UNRESOLVE", MUTATION_UNRESOLVE),
         ] {
             if let Err(e) = ExecutableDocument::parse_and_validate(&schema, doc, name) {
                 panic!("{name}:\n{}", e.errors);

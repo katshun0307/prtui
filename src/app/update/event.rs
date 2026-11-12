@@ -276,6 +276,59 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
             }
             vec![]
         }
+        Event::ResolvedThread {
+            number: n,
+            id,
+            resolve,
+            res,
+        } => {
+            let mut effects = vec![];
+            // 自分タブの一覧の未解決の数を直す
+            if res.is_ok() && state.pr(n).is_some() {
+                effects.push(Effect::Watch {
+                    number: n,
+                    until: WatchUntil::Immediately,
+                });
+            }
+            let text = match (&res, resolve) {
+                (Ok(_), true) => "スレッドを解決した".to_string(),
+                (Ok(_), false) => "スレッドを未解決に戻した".to_string(),
+                (Err(e), true) => format!("スレッドの解決失敗: {e}"),
+                (Err(e), false) => format!("スレッドを未解決に戻すのに失敗: {e}"),
+            };
+            match state.pr_view.as_mut().filter(|v| v.number == n) {
+                Some(view) => {
+                    view.resolving = false;
+                    match res {
+                        // 取り直さずに手元で書き換える. 取り直すと開いている位置がずれるため
+                        Ok(_) => {
+                            if let Some(c) = view.conversation.as_mut() {
+                                c.set_resolved(&id, resolve);
+                            }
+                            view.notice = Some(text);
+                        }
+                        Err(_) => view.error = Some(text),
+                    }
+                }
+                None if res.is_ok() => state.info(text),
+                None => state.error(text),
+            }
+            effects
+        }
+        Event::FetchedDiff(n, res) => {
+            let Some(view) = state.pr_view.as_mut().filter(|v| v.number == n) else {
+                return vec![];
+            };
+            view.diff.fetching = false;
+            match res {
+                Ok(d) => {
+                    view.diff.diff = Some(d);
+                    view.error = None;
+                }
+                Err(e) => view.error = Some(format!("diff の取得失敗: {e}")),
+            }
+            vec![]
+        }
         Event::SubmittedReview {
             number: n,
             action,

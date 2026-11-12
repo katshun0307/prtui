@@ -4,6 +4,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 
 use crate::domain::conversation::{Conversation, ReviewAction, same_body};
+use crate::domain::diff::Diff;
 use crate::domain::label::Label;
 use crate::domain::linear::{REVIEW_LINK_MARK, extract_review_url};
 use crate::domain::merge::{MergeMethod, MergeOutcome, MergeSettings};
@@ -12,8 +13,8 @@ use crate::domain::pr::Pr;
 use crate::domain::review::arrange_reviews;
 use crate::domain::stack::{arrange, arrange_flat};
 use crate::infra::graphql::{
-    QUERY, QUERY_CONVERSATION, QUERY_CUSTOM, QUERY_ONE, QUERY_REVIEW, parse_conversation,
-    parse_custom, parse_one, parse_review, parse_search,
+    MUTATION_RESOLVE, MUTATION_UNRESOLVE, QUERY, QUERY_CONVERSATION, QUERY_CUSTOM, QUERY_ONE,
+    QUERY_REVIEW, parse_conversation, parse_custom, parse_one, parse_review, parse_search,
 };
 use crate::infra::process::{run, run_with_stdin};
 
@@ -64,6 +65,16 @@ pub fn fetch_pr(dir: &Path, repo: &str, number: u64) -> Result<Option<Pr>> {
 pub fn fetch_conversation(dir: &Path, repo: &str, number: u64) -> Result<Conversation> {
     let out = gh(dir, &pr_query_args(QUERY_CONVERSATION, repo, number)?)?;
     parse_conversation(&out)
+}
+
+/// PR ビューの diff. open でない PR も取れる
+pub fn fetch_diff(dir: &Path, number: u64) -> Result<Diff> {
+    Ok(Diff::parse(&gh(dir, &diff_args(number))?))
+}
+
+/// 行へのスレッドを解決する. resolve が false なら未解決に戻す
+pub fn resolve_thread(dir: &Path, id: &str, resolve: bool) -> Result<()> {
+    gh(dir, &resolve_thread_args(id, resolve)).map(drop)
 }
 
 /// PR にレビュー (承認かコメント) を送る
@@ -433,6 +444,26 @@ fn merge_status_args(repo: &str, number: u64, uuid: &str) -> Vec<String> {
     ]
 }
 
+fn resolve_thread_args(id: &str, resolve: bool) -> Vec<String> {
+    let mutation = if resolve {
+        MUTATION_RESOLVE
+    } else {
+        MUTATION_UNRESOLVE
+    };
+    vec![
+        "api".into(),
+        "graphql".into(),
+        "-f".into(),
+        format!("query={mutation}"),
+        "-f".into(),
+        format!("id={id}"),
+    ]
+}
+
+fn diff_args(number: u64) -> Vec<String> {
+    strings(["pr", "diff", &number.to_string(), "--color", "never"])
+}
+
 fn view_body_args(number: u64) -> Vec<String> {
     strings([
         "pr",
@@ -568,6 +599,20 @@ mod tests {
             ["pr", "view", "3", "--json", "body", "--jq", ".body"]
         );
         assert_eq!(edit_body_args(3), ["pr", "edit", "3", "--body-file", "-"]);
+    }
+
+    #[test]
+    fn resolve_thread_by_id() {
+        let args = resolve_thread_args("PRRT_1", true);
+        assert!(args[3].starts_with("query=mutation") && args[3].contains("resolveReviewThread"));
+        assert_eq!(args[4..], ["-f", "id=PRRT_1"]);
+        let args = resolve_thread_args("PRRT_1", false);
+        assert!(args[3].contains("unresolveReviewThread"));
+    }
+
+    #[test]
+    fn diff_without_color() {
+        assert_eq!(diff_args(3), ["pr", "diff", "3", "--color", "never"]);
     }
 
     #[test]

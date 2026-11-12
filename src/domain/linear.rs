@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 /// ブランチ名, 次にタイトルの順で Linear の issue キー (`[A-Z][A-Z0-9]*-[0-9]+`) を探す.
 /// ブランチ名は `devin/abc-412-...` のように小文字のことがあるので大文字小文字を無視し, 大文字に正規化して返す.
 pub fn linear_issue_key(branch: &str, title: &str) -> Option<String> {
@@ -47,6 +49,82 @@ fn find_issue_key(s: &str, ignore_case: bool) -> Option<String> {
 /// この PR 自身の「Review in Linear」リンクは目印のコメントの直後にあるので, 目印より後だけを見る.
 pub(crate) const REVIEW_LINK_MARK: &str = "<!-- linear-review-link -->";
 
+/// Linear の bot が PR に付けるコメントの目印. 直後の `<details>` に issue の本文が丸ごと入る
+const LINKBACK_MARK: &str = "<!-- linear-linkback -->";
+
+/// PR ビューに出す本文. Linear の bot のコメントなら, issue の本文が入った `<details>` を
+/// `<summary>` (issue のキーとタイトル) だけにする. 長く, PR の会話としては読まないため.
+/// 目印が無いか `<details>` が閉じていなければそのまま返す
+pub fn fold_linkback(body: &str) -> Cow<'_, str> {
+    let Some(mark) = body.find(LINKBACK_MARK) else {
+        return Cow::Borrowed(body);
+    };
+    let after = mark + LINKBACK_MARK.len();
+    let Some(open) = body[after..].find("<details>").map(|i| after + i) else {
+        return Cow::Borrowed(body);
+    };
+    let Some(close) = details_end(body, open) else {
+        return Cow::Borrowed(body);
+    };
+    let block = &body[open..close];
+    let summary = block
+        .find("<summary>")
+        .and_then(|s| {
+            let s = s + "<summary>".len();
+            block[s..].find("</summary>").map(|e| &block[s..s + e])
+        })
+        .map(strip_tags)
+        .unwrap_or_default();
+    Cow::Owned(format!(
+        "{}{}\n(issue の本文は省略)\n{}",
+        &body[..open],
+        summary.trim(),
+        &body[close..]
+    ))
+}
+
+/// open にある `<details>` に対応する `</details>` の直後の位置. issue の本文に入れ子の `<details>` があっても
+/// 外側の終わりを返す
+fn details_end(body: &str, open: usize) -> Option<usize> {
+    const OPEN: &str = "<details";
+    const CLOSE: &str = "</details>";
+    let mut depth = 0usize;
+    let mut i = open;
+    loop {
+        let rest = &body[i..];
+        let o = rest.find(OPEN);
+        let c = rest.find(CLOSE)?;
+        match o {
+            Some(o) if o < c => {
+                depth += 1;
+                i += o + OPEN.len();
+            }
+            _ => {
+                depth -= 1;
+                i += c + CLOSE.len();
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+        }
+    }
+}
+
+/// `<...>` のタグを除く
+fn strip_tags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for ch in s.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out
+}
+
 pub(crate) fn extract_review_url(body: &str) -> Option<String> {
     let after = &body[body.find(REVIEW_LINK_MARK)? + REVIEW_LINK_MARK.len()..];
     let start = after.find("href=\"")? + "href=\"".len();
@@ -60,7 +138,7 @@ pub(crate) fn extract_review_url(body: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_review_url, linear_issue_key};
+    use super::{extract_review_url, fold_linkback, linear_issue_key};
 
     #[test]
     fn lowercase_branch_is_normalized() {
@@ -121,6 +199,31 @@ mod tests {
             extract_review_url(body).as_deref(),
             Some("https://linear.app/ws/review/abc-343-遅い-0123456789ab")
         );
+    }
+
+    #[test]
+    fn linkback_keeps_only_summary() {
+        let body = concat!(
+            "<!-- linear-linkback -->\n<details>\n",
+            "<summary><a href=\"https://linear.app/ws/issue/ABC-1/x\">ABC-1 タイトル</a></summary>\n",
+            "<p>\n\n## 課題\n<details><summary>入れ子</summary>中</details>\n長い本文\n</p>\n</details>\n",
+            "<!-- linear-review-link -->\n<p>Review</p>\n",
+        );
+        assert_eq!(
+            fold_linkback(body),
+            concat!(
+                "<!-- linear-linkback -->\nABC-1 タイトル\n(issue の本文は省略)\n\n",
+                "<!-- linear-review-link -->\n<p>Review</p>\n",
+            )
+        );
+    }
+
+    #[test]
+    fn linkback_untouched_without_mark_or_close() {
+        let plain = "<details><summary>s</summary>本文</details>";
+        assert_eq!(fold_linkback(plain), plain);
+        let open = "<!-- linear-linkback -->\n<details><summary>s</summary>本文";
+        assert_eq!(fold_linkback(open), open);
     }
 
     #[test]

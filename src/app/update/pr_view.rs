@@ -3,8 +3,9 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::event::Effect;
-use crate::app::state::{AppState, Composing, PrView};
+use crate::app::state::{AppState, Composing, PrPage, PrView};
 use crate::domain::conversation::{ReviewAction, editable_body, same_body};
+use crate::domain::diff::jump_file;
 
 /// 選択中の PR の PR ビューを開いて説明とコメントを取る. どのタブでも開ける
 pub(super) fn open_pr_view(state: &mut AppState) -> Vec<Effect> {
@@ -16,7 +17,9 @@ pub(super) fn open_pr_view(state: &mut AppState) -> Vec<Effect> {
     vec![Effect::FetchConversation(n)]
 }
 
-/// PR ビューのキー. スクロール, ブラウザ, 取り直し, レビュー (`!`), 説明の編集 (`e`), 閉じる
+/// PR ビューのキー. スクロール, ページの切り替え (`d`), ブラウザ, 取り直し, レビュー (`!`),
+/// 説明の編集 (`e`), 閉じる. 説明とコメントのページではスレッドの選択 (`]`/`[`) と解決 (`x`),
+/// diff のページでは横のスクロールとファイルの移動もする
 pub(super) fn pr_view_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
     let approve_body = state.local.approve_body.clone();
     let Some(view) = state.pr_view.as_mut() else {
@@ -54,19 +57,29 @@ pub(super) fn pr_view_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         KeyCode::PageUp => scroll_by(view, -half * 2),
         KeyCode::Char('j') | KeyCode::Down => scroll_by(view, 1),
         KeyCode::Char('k') | KeyCode::Up => scroll_by(view, -1),
-        KeyCode::Char('g') | KeyCode::Home => view.scroll = 0,
-        KeyCode::Char('G') | KeyCode::End => view.scroll = view.max_scroll,
+        KeyCode::Char('g') | KeyCode::Home => *scroll_mut(view).0 = 0,
+        KeyCode::Char('G') | KeyCode::End => {
+            let (scroll, max) = scroll_mut(view);
+            *scroll = max;
+        }
+        KeyCode::Char('d') => return toggle_page(view),
+        KeyCode::Char(']') if view.page == PrPage::Conversation => select_thread(view, 1),
+        KeyCode::Char('[') if view.page == PrPage::Conversation => select_thread(view, -1),
+        KeyCode::Char('x') if view.page == PrPage::Conversation && !view.is_sending() => {
+            return toggle_resolved(view);
+        }
+        KeyCode::Char(']') if view.page == PrPage::Diff => jump(view, 1),
+        KeyCode::Char('[') if view.page == PrPage::Diff => jump(view, -1),
+        KeyCode::Char('l') | KeyCode::Right if view.page == PrPage::Diff => shift_x(view, 8),
+        KeyCode::Char('h') | KeyCode::Left if view.page == PrPage::Diff => shift_x(view, -8),
+        KeyCode::Char('0') if view.page == PrPage::Diff => view.diff.x = 0,
         KeyCode::Char('o') => return vec![Effect::ViewWeb(view.number)],
         KeyCode::Char('!') if !view.is_sending() => {
             view.choosing_review = true;
             view.error = None;
         }
         KeyCode::Char('e') if !view.is_sending() => return edit_body(view),
-        KeyCode::Char('r') if !view.fetching => {
-            view.fetching = true;
-            view.error = None;
-            return vec![Effect::FetchConversation(view.number)];
-        }
+        KeyCode::Char('r') => return refetch(view),
         // 送信中に閉じると結果を出す場所が無くなる
         KeyCode::Esc | KeyCode::Char('q') if !view.is_sending() => state.pr_view = None,
         _ => {}
@@ -126,9 +139,121 @@ pub(super) fn submit_review(view: &mut PrView, action: ReviewAction, text: &str)
     }]
 }
 
+/// 次 (前) のスレッドを選び, その見出しを先頭に出す. 選んでいなければ画面の先頭から探す.
+/// 端を越えたら動かない
+fn select_thread(view: &mut PrView, delta: isize) {
+    let Some(c) = &view.conversation else {
+        return;
+    };
+    let threads = c.threads();
+    if threads.is_empty() {
+        view.notice = Some("スレッドが無い".into());
+        return;
+    }
+    let cur = view
+        .thread
+        .as_deref()
+        .and_then(|t| threads.iter().position(|(id, _)| *id == t));
+    let rows = &view.thread_rows;
+    let at = view.scroll.min(view.max_scroll);
+    let next = match cur {
+        Some(i) => i.checked_add_signed(delta).filter(|&j| j < threads.len()),
+        None if delta > 0 => (0..threads.len()).find(|&j| rows.get(j).is_none_or(|&r| r >= at)),
+        None => (0..threads.len())
+            .rev()
+            .find(|&j| rows.get(j).is_none_or(|&r| r <= at)),
+    };
+    let Some(j) = next else {
+        return;
+    };
+    view.thread = Some(threads[j].0.to_string());
+    if let Some(&r) = rows.get(j) {
+        view.scroll = r.min(view.max_scroll);
+    }
+}
+
+/// 選んだスレッドを解決する. 解決済みなら未解決に戻す
+fn toggle_resolved(view: &mut PrView) -> Vec<Effect> {
+    let found = view.thread.as_deref().and_then(|t| {
+        view.conversation
+            .as_ref()?
+            .threads()
+            .into_iter()
+            .find(|(id, _)| *id == t)
+            .map(|(id, resolved)| (id.to_string(), resolved))
+    });
+    let Some((id, resolved)) = found else {
+        view.notice = Some("]/[ でスレッドを選んでから x を押す".into());
+        return vec![];
+    };
+    view.resolving = true;
+    view.error = None;
+    vec![Effect::ResolveThread {
+        number: view.number,
+        id,
+        resolve: !resolved,
+    }]
+}
+
+/// 説明とコメントと diff を切り替える. diff は初めて開いたときに取る
+fn toggle_page(view: &mut PrView) -> Vec<Effect> {
+    view.page = match view.page {
+        PrPage::Conversation => PrPage::Diff,
+        PrPage::Diff => PrPage::Conversation,
+    };
+    if view.page == PrPage::Diff && view.diff.diff.is_none() && !view.diff.fetching {
+        view.diff.fetching = true;
+        return vec![Effect::FetchDiff(view.number)];
+    }
+    vec![]
+}
+
+/// 表示中のページを取り直す. 取得中は重ねない
+fn refetch(view: &mut PrView) -> Vec<Effect> {
+    let n = view.number;
+    let (fetching, effect) = match view.page {
+        PrPage::Conversation => (&mut view.fetching, Effect::FetchConversation(n)),
+        PrPage::Diff => (&mut view.diff.fetching, Effect::FetchDiff(n)),
+    };
+    if *fetching {
+        return vec![];
+    }
+    *fetching = true;
+    view.error = None;
+    vec![effect]
+}
+
+/// 表示中のページの scroll と, その上限
+fn scroll_mut(view: &mut PrView) -> (&mut usize, usize) {
+    match view.page {
+        PrPage::Conversation => (&mut view.scroll, view.max_scroll),
+        PrPage::Diff => (&mut view.diff.scroll, view.diff.max_scroll),
+    }
+}
+
 fn scroll_by(view: &mut PrView, delta: isize) {
-    let cur = view.scroll.min(view.max_scroll) as isize;
-    view.scroll = (cur + delta).clamp(0, view.max_scroll as isize) as usize;
+    let (scroll, max) = scroll_mut(view);
+    let cur = (*scroll).min(max) as isize;
+    *scroll = (cur + delta).clamp(0, max as isize) as usize;
+}
+
+/// 次 (前) のファイルの見出しを先頭に出す. 端を越えたら動かない.
+/// 末尾近くのファイルは見出しを先頭まで上げられないので, そのときは末尾を出す
+fn jump(view: &mut PrView, delta: isize) {
+    let page = &mut view.diff;
+    let Some(d) = &page.diff else {
+        return;
+    };
+    let at = page.scroll.min(page.max_scroll);
+    if let Some(s) = jump_file(&d.file_starts(), at, delta) {
+        page.scroll = s.min(page.max_scroll);
+    }
+}
+
+fn shift_x(view: &mut PrView, delta: isize) {
+    let page = &mut view.diff;
+    let cur = page.x.min(page.max_x) as isize;
+    page.x = (cur + delta).clamp(0, page.max_x as isize) as usize;
 }
 
 #[cfg(test)]
@@ -139,9 +264,11 @@ mod tests {
 
     use super::super::test_util::{code, key, pr, review_state, state};
     use super::super::{handle_event, handle_key};
+    use crate::app::event::WatchUntil;
     use crate::app::event::{Effect, Event};
-    use crate::app::state::{AppState, Composing, PrView};
-    use crate::domain::conversation::{Conversation, ReviewAction};
+    use crate::app::state::{AppState, Composing, PrPage, PrView};
+    use crate::domain::conversation::{Comment, Conversation, Entry, ReviewAction};
+    use crate::domain::diff::Diff;
 
     fn view(s: &AppState) -> &PrView {
         s.pr_view.as_ref().expect("pr_view")
@@ -247,6 +374,248 @@ mod tests {
         assert_eq!(scroll(&s), 10);
         handle_key(&mut s, key('g'));
         assert_eq!(scroll(&s), 0);
+    }
+
+    /// 未解決の T1 と解決済みの T2 のスレッド
+    fn with_threads() -> Conversation {
+        let thread = |id: &str, secs: i64, resolved: bool| Entry::Thread {
+            id: id.into(),
+            path: "a.rs".into(),
+            line: Some(1),
+            resolved,
+            outdated: false,
+            comments: vec![Comment {
+                author: "bob".into(),
+                created_at: DateTime::from_timestamp(secs, 0).unwrap(),
+                body: "ここ".into(),
+            }],
+        };
+        Conversation::new(
+            "me".into(),
+            DateTime::from_timestamp(0, 0).unwrap(),
+            "説明".into(),
+            vec![thread("T1", 10, false), thread("T2", 20, true)],
+            0,
+        )
+    }
+
+    fn thread_state() -> AppState {
+        let mut s = state(vec![pr(1)]);
+        handle_key(&mut s, key('p'));
+        handle_event(&mut s, Event::FetchedConversation(1, Ok(with_threads())));
+        let v = s.pr_view.as_mut().unwrap();
+        v.thread_rows = vec![5, 12];
+        v.max_scroll = 10;
+        s
+    }
+
+    #[test]
+    fn select_thread_scrolls_to_it() {
+        let mut s = thread_state();
+        // 選ぶ前の x は案内だけ
+        assert!(handle_key(&mut s, key('x')).is_empty());
+        assert_eq!(
+            view(&s).notice.as_deref(),
+            Some("]/[ でスレッドを選んでから x を押す")
+        );
+        // 画面の先頭 (0) より後の最初のスレッド
+        handle_key(&mut s, key(']'));
+        assert_eq!(
+            (view(&s).thread.as_deref(), view(&s).scroll),
+            (Some("T1"), 5)
+        );
+        // 末尾近くは末尾までしか上げられない
+        handle_key(&mut s, key(']'));
+        assert_eq!(
+            (view(&s).thread.as_deref(), view(&s).scroll),
+            (Some("T2"), 10)
+        );
+        // 端を越えたら動かない
+        handle_key(&mut s, key(']'));
+        assert_eq!(view(&s).thread.as_deref(), Some("T2"));
+        handle_key(&mut s, key('['));
+        assert_eq!(
+            (view(&s).thread.as_deref(), view(&s).scroll),
+            (Some("T1"), 5)
+        );
+
+        // 選んでいなければ [ は画面の先頭より前の最後のスレッド
+        let mut s = thread_state();
+        s.pr_view.as_mut().unwrap().scroll = 8;
+        handle_key(&mut s, key('['));
+        assert_eq!(view(&s).thread.as_deref(), Some("T1"));
+    }
+
+    #[test]
+    fn resolve_and_unresolve_thread() {
+        let mut s = thread_state();
+        handle_key(&mut s, key(']'));
+        assert_eq!(
+            handle_key(&mut s, key('x')),
+            vec![Effect::ResolveThread {
+                number: 1,
+                id: "T1".into(),
+                resolve: true,
+            }]
+        );
+        assert!(view(&s).resolving);
+        // 解決中は閉じず, 重ねない
+        assert!(handle_key(&mut s, key('x')).is_empty());
+        handle_key(&mut s, key('q'));
+        assert!(s.pr_view.is_some());
+
+        // 自分タブの PR なら一覧の未解決の数を取り直す
+        let effects = handle_event(
+            &mut s,
+            Event::ResolvedThread {
+                number: 1,
+                id: "T1".into(),
+                resolve: true,
+                res: Ok(()),
+            },
+        );
+        assert_eq!(
+            effects,
+            vec![Effect::Watch {
+                number: 1,
+                until: WatchUntil::Immediately,
+            }]
+        );
+        let c = view(&s).conversation.as_ref().unwrap();
+        assert_eq!(c.threads(), vec![("T1", true), ("T2", true)]);
+        assert!(!view(&s).resolving);
+        assert_eq!(view(&s).notice.as_deref(), Some("スレッドを解決した"));
+
+        // 解決済みなら未解決に戻す
+        assert_eq!(
+            handle_key(&mut s, key('x')),
+            vec![Effect::ResolveThread {
+                number: 1,
+                id: "T1".into(),
+                resolve: false,
+            }]
+        );
+        let effects = handle_event(
+            &mut s,
+            Event::ResolvedThread {
+                number: 1,
+                id: "T1".into(),
+                resolve: false,
+                res: Err(anyhow::anyhow!("Resource not accessible")),
+            },
+        );
+        assert!(effects.is_empty());
+        assert_eq!(
+            view(&s).error.as_deref(),
+            Some("スレッドを未解決に戻すのに失敗: Resource not accessible")
+        );
+        let c = view(&s).conversation.as_ref().unwrap();
+        assert_eq!(c.threads()[0], ("T1", true));
+    }
+
+    #[test]
+    fn resolve_in_review_tab_skips_list_reload() {
+        let mut s = opened(10);
+        s.pr_view.as_mut().unwrap().conversation = Some(with_threads());
+        handle_key(&mut s, key(']'));
+        handle_key(&mut s, key('x'));
+        let effects = handle_event(
+            &mut s,
+            Event::ResolvedThread {
+                number: 10,
+                id: "T1".into(),
+                resolve: true,
+                res: Ok(()),
+            },
+        );
+        assert!(effects.is_empty());
+    }
+
+    /// 3 ファイルで, 見出しは 0, 5, 10 行目. 全部で 14 行
+    fn diff() -> Diff {
+        let file = |p: &str| {
+            format!("diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n@@ -1 +1 @@\n-x\n+y\n")
+        };
+        Diff::parse(&[file("a"), file("b"), file("c")].concat())
+    }
+
+    #[test]
+    fn diff_page_fetches_once() {
+        let mut s = state(vec![pr(1)]);
+        handle_key(&mut s, key('p'));
+        assert_eq!(handle_key(&mut s, key('d')), vec![Effect::FetchDiff(1)]);
+        assert_eq!(view(&s).page, PrPage::Diff);
+        assert!(view(&s).diff.fetching);
+        // 取得中は r で重ねない. 説明とコメントの取得とは別
+        assert!(handle_key(&mut s, key('r')).is_empty());
+        // 別の PR の結果は捨てる
+        handle_event(&mut s, Event::FetchedDiff(2, Ok(diff())));
+        assert!(view(&s).diff.diff.is_none());
+        handle_event(&mut s, Event::FetchedDiff(1, Ok(diff())));
+        assert!(!view(&s).diff.fetching && view(&s).diff.diff.is_some());
+
+        // 戻って, もう一度開いても取り直さない
+        assert!(handle_key(&mut s, key('d')).is_empty());
+        assert_eq!(view(&s).page, PrPage::Conversation);
+        assert!(handle_key(&mut s, key('d')).is_empty());
+        // r は表示中のページを取り直す
+        assert_eq!(handle_key(&mut s, key('r')), vec![Effect::FetchDiff(1)]);
+        handle_event(
+            &mut s,
+            Event::FetchedDiff(1, Err(anyhow::anyhow!("too large"))),
+        );
+        assert_eq!(
+            view(&s).error.as_deref(),
+            Some("diff の取得失敗: too large")
+        );
+        // 失敗しても前の内容は残す
+        assert!(view(&s).diff.diff.is_some());
+    }
+
+    #[test]
+    fn diff_page_scrolls_separately() {
+        let mut s = state(vec![pr(1)]);
+        handle_key(&mut s, key('p'));
+        handle_key(&mut s, key('d'));
+        handle_event(&mut s, Event::FetchedDiff(1, Ok(diff())));
+        {
+            let v = s.pr_view.as_mut().unwrap();
+            v.max_scroll = 10;
+            v.diff.max_scroll = 6;
+            v.diff.max_x = 20;
+            v.viewport_height = 5;
+        }
+        handle_key(&mut s, key('G'));
+        assert_eq!((view(&s).diff.scroll, view(&s).scroll), (6, 0));
+        handle_key(&mut s, key('g'));
+
+        // ファイルの見出しへ飛ぶ. 最後のファイルは末尾までしか上げられない
+        handle_key(&mut s, key(']'));
+        assert_eq!(view(&s).diff.scroll, 5);
+        handle_key(&mut s, key(']'));
+        assert_eq!(view(&s).diff.scroll, 6);
+        handle_key(&mut s, key(']'));
+        assert_eq!(view(&s).diff.scroll, 6);
+        handle_key(&mut s, key('['));
+        assert_eq!(view(&s).diff.scroll, 5);
+        handle_key(&mut s, key('['));
+        assert_eq!(view(&s).diff.scroll, 0);
+
+        // 横のスクロール
+        for _ in 0..3 {
+            handle_key(&mut s, key('l'));
+        }
+        assert_eq!(view(&s).diff.x, 20);
+        handle_key(&mut s, key('h'));
+        assert_eq!(view(&s).diff.x, 12);
+        handle_key(&mut s, key('0'));
+        assert_eq!(view(&s).diff.x, 0);
+
+        // 説明とコメントのページでは ] や l は効かない
+        handle_key(&mut s, key('d'));
+        handle_key(&mut s, key(']'));
+        handle_key(&mut s, key('j'));
+        assert_eq!((view(&s).scroll, view(&s).diff.scroll), (1, 0));
     }
 
     fn opened(n: u64) -> AppState {

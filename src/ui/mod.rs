@@ -306,10 +306,11 @@ mod tests {
 
     use super::*;
     use crate::app::Tab;
-    use crate::app::{LabelMenu, MergeMenu, PrView, ReviewerMenu};
+    use crate::app::{LabelMenu, MergeMenu, PrPage, PrView, ReviewerMenu};
     use crate::domain::conversation::{Comment, Conversation, Entry, Verdict};
     use crate::domain::copy::copy_items;
     use crate::domain::devin::DevinConfig;
+    use crate::domain::diff::Diff;
     use crate::domain::label::Label;
     use crate::domain::local::{LocalState, ReviewerSet, TabQuery};
     use crate::domain::merge::{MergeMethod, MergeSettings};
@@ -867,6 +868,7 @@ mod tests {
             vec![
                 Entry::Comment(comment("bob", days_ago(2), "見ます")),
                 Entry::Thread {
+                    id: "T_a".into(),
                     path: "src/a.rs".into(),
                     line: Some(12),
                     resolved: false,
@@ -881,6 +883,7 @@ mod tests {
                     comment: comment("alice", hours_ago(18), "直して"),
                 },
                 Entry::Thread {
+                    id: "T_b".into(),
                     path: "src/b.rs".into(),
                     line: Some(3),
                     resolved: true,
@@ -912,6 +915,93 @@ mod tests {
         let v = s.pr_view.as_ref().unwrap();
         // 2 行のヘッダの下の 27 行の欄に 28 行なので, 最後の 1 行はスクロールで出す
         assert_eq!((v.viewport_height, v.max_scroll), (27, 1));
+        // スレッドの見出しの位置
+        assert_eq!(v.thread_rows, vec![14, 23]);
+        let rows = screen(&term);
+        let rows: Vec<&str> = rows.lines().collect();
+        assert!(rows[2 + 14].starts_with("── src/a.rs:12"));
+        assert!(rows[2 + 23].starts_with("── src/b.rs:3"));
+    }
+
+    #[test]
+    fn pr_view_selected_thread() {
+        let mut s = state();
+        let mut view = PrView::new(&Pr::fixture(1, "feature/base", "main"));
+        view.conversation = Some(conversation());
+        view.fetching = false;
+        view.thread = Some("T_b".into());
+        s.pr_view = Some(view);
+        let term = terminal(&mut s);
+        let row = 2 + s.pr_view.as_ref().unwrap().thread_rows[1] as u16;
+        // 選んだスレッドの見出しだけ背景を付ける
+        let bg = |y: u16| term.backend().buffer()[(0, y)].style().bg;
+        assert_eq!(bg(row), Some(SELECTED_BG));
+        let other = 2 + s.pr_view.as_ref().unwrap().thread_rows[0] as u16;
+        assert_eq!(bg(other), Some(Color::Reset));
+    }
+
+    #[test]
+    fn pr_view_diff() {
+        let mut s = state();
+        let mut p = Pr::fixture(1, "feature/base", "main");
+        p.title = "ABC-1 土台を足す".into();
+        p.author = "katshun".into();
+        let mut view = PrView::new(&p);
+        view.fetching = false;
+        view.page = PrPage::Diff;
+        let long = "x".repeat(200);
+        view.diff.diff = Some(Diff::parse(&format!(
+            "diff --git a/src/a.rs b/src/a.rs\n\
+             index 1..2 100644\n\
+             --- a/src/a.rs\n\
+             +++ b/src/a.rs\n\
+             @@ -1,3 +1,3 @@ fn main() {{\n\
+             \tlet a = 1;\n\
+             -let b = 2;\n\
+             +let b = 3; // {long}\n\
+             \\ No newline at end of file\n\
+             diff --git a/new.txt b/new.txt\n\
+             new file mode 100644\n\
+             --- /dev/null\n\
+             +++ b/new.txt\n\
+             @@ -0,0 +1 @@\n\
+             +hello\n\
+             diff --git a/old.rs b/new.rs\n\
+             similarity index 90%\n\
+             rename from old.rs\n\
+             rename to new.rs\n\
+             diff --git a/img.png b/img.png\n\
+             Binary files a/img.png and b/img.png differ\n"
+        )));
+        s.pr_view = Some(view);
+        let term = terminal(&mut s);
+        insta::assert_snapshot!(screen(&term));
+        insta::assert_snapshot!("pr_view_diff_styles", styles(&term));
+        let v = &s.pr_view.as_ref().unwrap().diff;
+        assert_eq!(v.max_scroll, 0);
+        // 一番長い行 (+let b = 3; // x…) が 215 桁で, 欄の幅が 160
+        assert_eq!(v.max_x, 55);
+
+        // 横に送っても見出しは動かない
+        s.pr_view.as_mut().unwrap().diff.x = 10;
+        let rows = screen(&terminal(&mut s));
+        let rows: Vec<&str> = rows.lines().collect();
+        assert!(rows[2].starts_with("── src/a.rs  +1 -1 "));
+        assert_eq!(rows[6], "; // ".to_string() + &"x".repeat(155));
+    }
+
+    #[test]
+    fn pr_view_diff_empty() {
+        let mut s = state();
+        let mut view = PrView::new(&Pr::fixture(1, "feature/base", "main"));
+        view.page = PrPage::Diff;
+        view.diff.fetching = true;
+        s.pr_view = Some(view);
+        assert_eq!(screen(&terminal(&mut s)).lines().nth(2), Some("取得中…"));
+        let v = s.pr_view.as_mut().unwrap();
+        v.diff.fetching = false;
+        v.diff.diff = Some(Diff::default());
+        assert_eq!(screen(&terminal(&mut s)).lines().nth(2), Some("差分なし"));
     }
 
     #[test]

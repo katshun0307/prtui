@@ -2,6 +2,7 @@ use anyhow::Result;
 
 use crate::domain::conversation::{Conversation, ReviewAction};
 use crate::domain::devin::{DevinMessage, DevinSession};
+use crate::domain::diff::Diff;
 use crate::domain::label::{Label, same_labels};
 use crate::domain::merge::{MergeMethod, MergeOutcome, MergeSettings};
 use crate::domain::op::PrOp;
@@ -44,6 +45,15 @@ pub enum Event {
     FetchedLabels(Result<Vec<Label>>),
     /// PR ビューの説明とコメント
     FetchedConversation(u64, Result<Conversation>),
+    /// PR ビューの diff
+    FetchedDiff(u64, Result<Diff>),
+    /// PR ビューからスレッドを解決 (resolve が false なら未解決に戻) した結果
+    ResolvedThread {
+        number: u64,
+        id: String,
+        resolve: bool,
+        res: Result<()>,
+    },
     /// PR ビューから送ったレビューの結果
     SubmittedReview {
         number: u64,
@@ -147,6 +157,14 @@ pub enum Effect {
     FetchLabels,
     /// PR の説明とコメントをスレッドで取る
     FetchConversation(u64),
+    /// PR の diff をスレッドで取る
+    FetchDiff(u64),
+    /// 行へのスレッドを解決する. resolve が false なら未解決に戻す. number は結果を返す PR ビューの PR
+    ResolveThread {
+        number: u64,
+        id: String,
+        resolve: bool,
+    },
     /// PR にレビュー (承認かコメント) を送る
     SubmitReview {
         number: u64,

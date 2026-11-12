@@ -236,6 +236,7 @@ pub(super) struct ReviewNode {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct ThreadNode {
+    pub(super) id: String,
     pub(super) is_resolved: bool,
     pub(super) is_outdated: bool,
     pub(super) path: String,

@@ -10,6 +10,7 @@ use super::ports::{CacheStore, Desktop, Devin, Git, Github, Ports};
 use crate::domain::cache::Cache;
 use crate::domain::conversation::{Conversation, ReviewAction};
 use crate::domain::devin::{DevinConfig, DevinMessage, DevinSession};
+use crate::domain::diff::Diff;
 use crate::domain::label::Label;
 use crate::domain::local::LocalState;
 use crate::domain::merge::{MergeMethod, MergeOutcome, MergeSettings};
@@ -41,6 +42,14 @@ impl Github for GhCli {
 
     fn fetch_conversation(&self, number: u64) -> Result<Conversation> {
         gh::fetch_conversation(&self.dir, &self.repo, number)
+    }
+
+    fn fetch_diff(&self, number: u64) -> Result<Diff> {
+        gh::fetch_diff(&self.dir, number)
+    }
+
+    fn resolve_thread(&self, id: &str, resolve: bool) -> Result<()> {
+        gh::resolve_thread(&self.dir, id, resolve)
     }
 
     fn submit_review(&self, number: u64, action: ReviewAction, body: &str) -> Result<String> {

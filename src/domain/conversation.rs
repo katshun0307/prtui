@@ -2,6 +2,8 @@
 
 use chrono::{DateTime, Utc};
 
+use super::linear::fold_linkback;
+
 /// 1 件の書き込み. 削除されたユーザーの author は `ghost`
 #[derive(Debug, Clone, PartialEq)]
 pub struct Comment {
@@ -78,8 +80,10 @@ pub enum Entry {
     Comment(Comment),
     /// レビューの本文. 行へのコメントは `Thread` に出す
     Review { verdict: Verdict, comment: Comment },
-    /// 行へのコメントのスレッド. line は今の差分での行で, outdated なら元の行
+    /// 行へのコメントのスレッド. line は今の差分での行で, outdated なら元の行.
+    /// id は GraphQL の node ID で, 解決と未解決に戻すのに使う
     Thread {
+        id: String,
         path: String,
         line: Option<u64>,
         resolved: bool,
@@ -129,6 +133,28 @@ impl Conversation {
         }
     }
 
+    /// スレッドの ID と解決済みかを, 並びの順に
+    pub fn threads(&self) -> Vec<(&str, bool)> {
+        self.entries
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Thread { id, resolved, .. } => Some((id.as_str(), *resolved)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// スレッドの解決済みを書き換える. 無ければ何もしない
+    pub fn set_resolved(&mut self, thread: &str, value: bool) {
+        for e in &mut self.entries {
+            if let Entry::Thread { id, resolved, .. } = e
+                && id == thread
+            {
+                *resolved = value;
+            }
+        }
+    }
+
     /// `(コメント, レビュー, スレッド, 未解決のスレッド)` の件数
     pub fn counts(&self) -> (usize, usize, usize, usize) {
         let mut n = (0, 0, 0, 0);
@@ -148,11 +174,13 @@ impl Conversation {
     }
 }
 
-/// 描画用に本文を整える. HTML コメント (`<!-- -->`. PR テンプレートや bot が入れる) を除き,
+/// 描画用に本文を整える. Linear の bot のコメントは issue の本文を除き (`fold_linkback`),
+/// HTML コメント (`<!-- -->`. PR テンプレートや bot が入れる) を除き,
 /// 続く空行を 1 行にまとめ, 前後の空行と行末の空白を落とす. 閉じていない HTML コメントは残す
 pub fn tidy_body(body: &str) -> String {
+    let body = fold_linkback(body);
     let mut text = String::with_capacity(body.len());
-    let mut rest = body;
+    let mut rest = body.as_ref();
     while let Some(start) = rest.find("<!--") {
         let Some(len) = rest[start..].find("-->") else {
             break;
@@ -207,6 +235,7 @@ mod tests {
     #[test]
     fn entries_sorted_by_time_and_thread_by_first_comment() {
         let thread = Entry::Thread {
+            id: "T1".into(),
             path: "a.rs".into(),
             line: Some(1),
             resolved: false,
@@ -233,6 +262,11 @@ mod tests {
         // 同じ時刻なら元の順
         assert_eq!(c.entries[2], Entry::Comment(comment("c", 30)));
         assert_eq!(c.counts(), (2, 1, 1, 1));
+        assert_eq!(c.threads(), vec![("T1", false)]);
+        let mut c = c;
+        c.set_resolved("T1", true);
+        c.set_resolved("none", false);
+        assert_eq!(c.counts(), (2, 1, 1, 0));
     }
 
     #[test]
@@ -252,6 +286,13 @@ mod tests {
         // 閉じていなければ残す
         assert_eq!(tidy_body("a <!-- b"), "a <!-- b");
         assert_eq!(tidy_body("<!-- only -->"), "");
+        // Linear の bot のコメントは issue の本文を除く
+        assert_eq!(
+            tidy_body(
+                "<!-- linear-linkback -->\n<details><summary>ABC-1 t</summary>本文</details>"
+            ),
+            "ABC-1 t\n(issue の本文は省略)"
+        );
     }
 
     #[test]
