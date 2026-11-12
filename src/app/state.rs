@@ -8,6 +8,7 @@ use ratatui::widgets::{ListState, TableState};
 use crate::domain::conversation::{Conversation, ReviewAction};
 use crate::domain::copy::CopyItem;
 use crate::domain::devin::{DevinMessage, DevinSession, session_for};
+use crate::domain::diff::Diff;
 use crate::domain::label::{Label, label_choices};
 use crate::domain::local::LocalState;
 use crate::domain::merge::MergeSettings;
@@ -76,6 +77,30 @@ pub enum Composing {
     },
 }
 
+/// PR ビューのページ. `d` で切り替える
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PrPage {
+    #[default]
+    Conversation,
+    Diff,
+}
+
+/// PR ビューの diff のページ. 初めて開いたときに取る
+#[derive(Debug, Default)]
+pub struct DiffPage {
+    /// 取り直している間も前の内容を出す
+    pub diff: Option<Diff>,
+    pub fetching: bool,
+    /// 先頭からの表示位置
+    pub scroll: usize,
+    /// 描画が書く. 末尾を表示するときの scroll
+    pub max_scroll: usize,
+    /// 行頭からの表示位置. 長い行は折り返さず横に送って読む
+    pub x: usize,
+    /// 描画が書く. 表示中の行の右端を出すときの x
+    pub max_x: usize,
+}
+
 /// `p` で開く PR ビュー. PR の説明とコメントを全画面に出す. どのタブの PR でも開ける
 #[derive(Debug, Default)]
 pub struct PrView {
@@ -107,14 +132,24 @@ pub struct PrView {
     pub scroll: usize,
     /// 描画が書く. 末尾を表示するときの scroll
     pub max_scroll: usize,
-    /// 描画が書く. 本文の欄の高さ
+    /// 描画が書く. 本文の欄の高さ. 2 つのページで共通
     pub viewport_height: u16,
+    /// `]`/`[` で選んだスレッドの ID. `x` で解決する
+    pub thread: Option<String>,
+    /// 描画が書く. 説明とコメントのページでの各スレッドの見出しの位置 (折り返した後の行).
+    /// `Conversation::threads` と同じ順
+    pub thread_rows: Vec<usize>,
+    /// スレッドを解決中
+    pub resolving: bool,
+    /// 表示中のページ
+    pub page: PrPage,
+    pub diff: DiffPage,
 }
 
 impl PrView {
-    /// レビューの送信か説明の更新の最中. 閉じたり重ねたりしない
+    /// レビューの送信, 説明の更新, スレッドの解決の最中. 閉じたり重ねたりしない
     pub fn is_sending(&self) -> bool {
-        self.submitting || self.saving_body
+        self.submitting || self.saving_body || self.resolving
     }
 
     pub fn new(pr: &Pr) -> Self {

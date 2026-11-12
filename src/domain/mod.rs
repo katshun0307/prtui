@@ -2,6 +2,7 @@ pub mod cache;
 pub mod conversation;
 pub mod copy;
 pub mod devin;
+pub mod diff;
 pub mod label;
 pub mod linear;
 pub mod local;

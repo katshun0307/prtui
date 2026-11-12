@@ -1,0 +1,60 @@
+---
+source: src/ui/mod.rs
+expression: styles(&term)
+---
+ 0   0 " #1  ABC-1 土台を足す" bg=Indexed(237) BOLD
+ 0  21 "                                                                                                                                           " bg=Indexed(237)
+ 1   0 " katshun  " bg=Indexed(237)
+ 1  10 "feature/base" fg=Cyan bg=Indexed(237)
+ 1  22 " → " fg=Indexed(245) bg=Indexed(237)
+ 1  25 "main" fg=Cyan bg=Indexed(237)
+ 1  29 "  diff" bg=Indexed(237) BOLD
+ 1  35 "  4 ファイル" fg=Indexed(245) bg=Indexed(237)
+ 1  47 "  +2" fg=Green bg=Indexed(237)
+ 1  51 " -1" fg=Red bg=Indexed(237)
+ 1  54 "                                                                                                          " bg=Indexed(237)
+ 2   0 "── " fg=Indexed(245)
+ 2   3 "src/a.rs" BOLD
+ 2  11 "  +1" fg=Green
+ 2  15 " -1" fg=Red
+ 2  19 "─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────" fg=Indexed(245)
+ 3   0 "@@ -1,3 +1,3 @@ fn main() {" fg=Cyan
+ 5   0 "-let b = 2;" fg=Red
+ 6   0 "+let b = 3; // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" fg=Green
+ 7   0 "\\ No newline at end of file" fg=Indexed(245)
+ 9   0 "── " fg=Indexed(245)
+ 9   3 "new.txt" BOLD
+ 9  10 "  新規  +1" fg=Green
+ 9  20 " -0" fg=Red
+ 9  24 "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────" fg=Indexed(245)
+10   0 "@@ -0,0 +1 @@" fg=Cyan
+11   0 "+hello" fg=Green
+13   0 "── " fg=Indexed(245)
+13   3 "old.rs" BOLD
+13   9 " → " fg=Indexed(245)
+13  12 "new.rs" BOLD
+13  19 "─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────" fg=Indexed(245)
+15   0 "── " fg=Indexed(245)
+15   3 "img.png" BOLD
+15  10 "  バイナリ" fg=Indexed(245)
+15  21 "───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────" fg=Indexed(245)
+29   1 "j/k" fg=Cyan
+29   4 " スクロール  " fg=Indexed(245)
+29  17 "C-d/C-u" fg=Cyan
+29  24 " 半画面  " fg=Indexed(245)
+29  33 "g/G" fg=Cyan
+29  36 " 先頭/末尾  " fg=Indexed(245)
+29  48 "]/[" fg=Cyan
+29  51 " 次/前のファイル  " fg=Indexed(245)
+29  69 "h/l" fg=Cyan
+29  72 " 横  " fg=Indexed(245)
+29  77 "d" fg=Cyan
+29  78 " 説明とコメント  " fg=Indexed(245)
+29  95 "!" fg=Cyan
+29  96 " レビュー  " fg=Indexed(245)
+29 107 "o" fg=Cyan
+29 108 " ブラウザ  " fg=Indexed(245)
+29 119 "r" fg=Cyan
+29 120 " 更新  " fg=Indexed(245)
+29 127 "q" fg=Cyan
+29 128 " 戻る  " fg=Indexed(245)

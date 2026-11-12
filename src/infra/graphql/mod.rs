@@ -10,7 +10,10 @@ use crate::domain::conversation::{Comment, Conversation, Entry, Verdict};
 use crate::domain::label::Label;
 use crate::domain::pr::{Check, CheckState, MyReview, Pr, Reviewer, ReviewerState};
 
-pub(crate) use query::{QUERY, QUERY_CONVERSATION, QUERY_CUSTOM, QUERY_ONE, QUERY_REVIEW};
+pub(crate) use query::{
+    MUTATION_RESOLVE, MUTATION_UNRESOLVE, QUERY, QUERY_CONVERSATION, QUERY_CUSTOM, QUERY_ONE,
+    QUERY_REVIEW,
+};
 use raw::{
     CommentNode, Context_, ConversationResponse, CustomResponse, OneResponse, RawPr,
     RequestedReviewer, Response, Review, ReviewRequest, ReviewResponse,
@@ -332,6 +335,7 @@ pub(crate) fn parse_conversation(json: &str) -> Result<Conversation> {
         })
     });
     let threads = r.review_threads.nodes.into_iter().map(|t| Entry::Thread {
+        id: t.id,
         line: if t.is_outdated {
             t.original_line
         } else {
@@ -609,9 +613,9 @@ mod tests {
             {"state":"PENDING","submittedAt":null,"createdAt":"2026-11-01T06:00:00Z","body":"下書き","author":{"login":"me"}}
           ]},
           "reviewThreads":{"totalCount":2,"nodes":[
-            {"isResolved":false,"isOutdated":false,"path":"src/a.rs","line":12,"originalLine":10,
+            {"id":"T_a","isResolved":false,"isOutdated":false,"path":"src/a.rs","line":12,"originalLine":10,
              "comments":{"nodes":[{"author":{"login":"alice"},"createdAt":"2026-11-01T02:00:00Z","body":"ここ"}]}},
-            {"isResolved":true,"isOutdated":true,"path":"src/b.rs","line":null,"originalLine":7,
+            {"id":"T_b","isResolved":true,"isOutdated":true,"path":"src/b.rs","line":null,"originalLine":7,
              "comments":{"nodes":[{"author":{"login":"carol"},"createdAt":"2026-11-01T00:30:00Z","body":"古い"}]}}
           ]}
         }}}}"#;
@@ -627,13 +631,14 @@ mod tests {
                     format!("review {} {verdict:?} {}", comment.author, comment.body)
                 }
                 Entry::Thread {
+                    id,
                     path,
                     line,
                     resolved,
                     outdated,
                     comments,
                 } => format!(
-                    "thread {path}:{line:?} {resolved} {outdated} {}",
+                    "thread {id} {path}:{line:?} {resolved} {outdated} {}",
                     comments.len()
                 ),
             })
@@ -642,9 +647,9 @@ mod tests {
         assert_eq!(
             summary,
             vec![
-                "thread src/b.rs:Some(7) true true 1",
+                "thread T_b src/b.rs:Some(7) true true 1",
                 "comment bob c1",
-                "thread src/a.rs:Some(12) false false 1",
+                "thread T_a src/a.rs:Some(12) false false 1",
                 "review carol Commented 総評",
                 "comment ghost 消えた人",
                 "review alice Approved ",

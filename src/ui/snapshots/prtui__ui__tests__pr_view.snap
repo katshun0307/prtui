@@ -31,4 +31,4 @@ expression: screen(&term)
   carol  10h 前
   古い
 
- j/k スクロール  C-d/C-u 半画面  Space 1 画面  g/G 先頭/末尾  ! レビュー  e 説明を編集  o ブラウザ  r 更新  q 戻る
+ j/k スクロール  C-d/C-u 半画面  Space 1 画面  g/G 先頭/末尾  ]/[ スレッド  x 解決  d diff  ! レビュー  e 説明を編集  o ブラウザ  r 更新  q 戻る

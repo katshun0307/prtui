@@ -1,0 +1,3 @@
+mutation($id:ID!) {
+  unresolveReviewThread(input:{threadId:$id}) { thread { isResolved } }
+}
