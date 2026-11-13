@@ -14,7 +14,7 @@ use crate::domain::label::has_label;
 pub(super) fn draw_label_menu(f: &mut Frame, state: &mut AppState, area: Rect) {
     let choices = state.label_choices();
     let loading = state.labels_loading;
-    let Some(menu) = state.label_menu.as_mut() else {
+    let Some(menu) = state.label_menu_mut() else {
         return;
     };
     let name_width = choices

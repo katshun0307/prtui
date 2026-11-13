@@ -44,7 +44,7 @@
   - レビュー (`!`): 続けて `a` で承認, `c` でコメント (他のキーで取りやめ). 本文は `${VISUAL:-${EDITOR:-vi}}` で書き (会話ビューの `e` と同じ一時ファイルの仕組み. 戻った `Event::Composed` は `PrView::composing` が Some ならレビューに使う), `gh pr review <n> --approve|--comment --body` で送る. 承認は本文が空でも送り (`--body` を付けない), コメントは空なら取りやめる. 承認のエディタの初期値は git config `prtui.approve-body` (`LGTM 👍` など. repo ごとでも global でもよい. 2026-11-09 追加. ユーザーの指定) で, 消して保存すれば本文なしで承認する. コメントの初期値は常に空. エディタを非 0 で終えたら取りやめ. 自分の PR の承認などは GitHub のエラーをそのままフッターに出す (タブで制限しない). 成功したら説明とコメントとレビュータブを取り直す. 送信中は PR ビューを閉じない. 変更要求 (request changes) はユーザーの指定に無いので入れていない
   - スレッドの解決 (`]`/`[` と `x`): 説明とコメントのページで `]`/`[` で次 / 前の行へのスレッドを選び (見出しに背景を付け, 見出しを画面の先頭に出す), `x` で解決する. 解決済みなら未解決に戻す (2026-11-12 追加. ユーザーの指定). 選んでいないときの `]` は画面の先頭以降の最初のスレッド, `[` は先頭以前の最後のスレッドを選ぶ. 本文を折り返すので, 見出しの位置は描画が 1 行ずつの高さを足して `PrView::thread_rows` に書く. GraphQL の `resolveReviewThread` / `unresolveReviewThread` を `gh api graphql` で呼び, スレッドの node ID は `conversation.graphql` で一緒に取る. 成功したら取り直さずに手元の `resolved` を書き換える (取り直すと読んでいる位置がずれるため). 自分タブの PR なら一覧の未解決の数のため 1 件を取り直す. 権限が無いなどのエラーは GitHub のものをフッターに出す. 解決中は PR ビューを閉じない. 取り消しの確認は付けていない (`x` をもう一度押せば戻せるため)
   - Linear の bot のコメント: `<!-- linear-linkback -->` の後の `<details>` には issue の本文が丸ごと入っているので, `<summary>` (issue のキーとタイトル) と `(issue の本文は省略)` だけにする (2026-11-12. ユーザーの指定. `domain/linear.rs` の `fold_linkback` を `tidy_body` で呼ぶ). 入れ子の `<details>` は外側の終わりまでを除く. 後に続く `Review in Linear` の `<p><a href=…>` は HTML のまま出る
-  - diff (`d`): PR ビューの中で説明とコメントのページと diff のページを切り替える (2026-11-12 追加. ユーザーの指定). diff は初めて開いたときに `gh pr diff <n> --color never` で取り, `domain/diff.rs` の `Diff::parse` でファイルごとに分ける. キャッシュはせず, PR ビューを閉じれば捨てる. `r` は表示中のページだけを取り直す. スクロール位置はページごとに持つ. 各ファイルの先頭は `── <path>  新規|削除|バイナリ  +n -m ───…` の罫線 (rename は `old → new`) で, 行は追加を green, 削除を red, hunk の見出しを cyan, `\ No newline at end of file` を DIM にする. 折り返さない (行の位置がずれず `]`/`[` で次 / 前のファイルの見出しに飛べるようにするため). 長い行は `h`/`l` (8 桁ずつ) と `0` で横に送り, ファイルの見出しは横に送らない. タブは空白 4 つにする. 大きな diff でも重くならないよう見えている行だけを作る. 一覧の `d` (`gh pr diff` を端末に繋いでページャで読む) はそのまま残した. GitHub の diff の上限 (300 ファイル / 2 万行) を超える PR は gh のエラーをフッターに出す
+  - diff (`d`): PR ビューの中で説明とコメントのページと diff のページを切り替える (2026-11-12 追加. ユーザーの指定). diff は初めて開いたときに `gh pr diff <n> --color never` で取り, `domain/diff.rs` の `Diff::parse` でファイルごとに分ける. キャッシュはせず, PR ビューを閉じれば捨てる. `r` は表示中のページだけを取り直す. スクロール位置はページごとに持つ. 各ファイルの先頭は `── <path>  新規|削除|バイナリ  +n -m ───…` の罫線 (rename は `old → new`) で, 行は追加を green, 削除を red, hunk の見出しを cyan, `\ No newline at end of file` を DIM にする. 折り返さない (行の位置がずれず `]`/`[` で次 / 前のファイルの見出しに飛べるようにするため). 長い行は `h`/`l` (8 桁ずつ) と `0` で横に送り, ファイルの見出しは横に送らない. タブは空白 4 つにする. 大きな diff でも重くならないよう見えている行だけを作る. `Esc`/`q` は diff のページでは説明とコメントのページに戻り, そこでもう一度押すと一覧に戻る (2026-11-13 変更. ユーザーの指定. 直前の画面に戻るようにするため). 一覧の `d` (`gh pr diff` を端末に繋いでページャで読む) はそのまま残した. GitHub の diff の上限 (300 ファイル / 2 万行) を超える PR は gh のエラーをフッターに出す
   - 説明の編集 (`e`): PR の説明をエディタ (git config `prtui.editor`, 無ければ `${VISUAL:-${EDITOR:-vi}}`) で書き換える (2026-11-11 追加. ユーザーの指定). 表示中の説明 (HTML コメントを除く前の生の本文. CRLF は LF にする) を初期値にし, 戻った `Event::Composed` は `PrView::composing` が `Composing::Body` なら説明の更新に使う. 改行コードと末尾の空白だけの違いは変更とみなさず何もしない. 空にするのは許す. 更新は `gh pr edit <n> --body-file -` に stdin で渡す. GitHub の API に楽観ロックが無いので, 直前に `gh pr view --json body` で取り直し, エディタを開いたときの説明と違えば書き換えずにエラーにする (編集中に他の人や bot が書き換えた内容を消さないため). 失敗したら書いた内容を `PrView::body_draft` に残し, 次の `e` でそれを開く (`r` で取り直してから差分を手で直す). タブでは制限せず GitHub のエラーを出す. 成功したら説明とコメントを取り直す. 更新中は PR ビューを閉じず, `!` と `e` も重ねない
 - Devin session: PR に紐づく Devin session のやり取りを読み, メッセージを送る (2026-10-29 追加. 仕様はユーザーと質疑で決めた).
   - 設定は git config `prtui.devin-token` と `prtui.devin-org` (`org-...`). token は個人, org は組織ごとなので置き場所 (global / repo) は自由にした. 未設定なら session を取らず, Devin 列と詳細欄の `devin:` 行を出さない (キャッシュに session が残っていても出さない). フッターの `v` も出さないが, 押せば設定を促すエラーを出す. 設定の要らない `V` (Devin Review) は残す (2026-11-06 変更. それまでは未設定でも空の Devin 列を出していた)
@@ -88,7 +88,7 @@
 | `src/infra/graphql/` | `*.graphql` (クエリと fragment の本文), `schema.graphql` (GitHub の公開 schema. `task schema` で取り直す), `query.rs` (`.graphql` を `include_str!` して送る文書を組み立てる. schema に照らす検証テストもここ), `raw.rs` (`Raw*` 型), `mod.rs` (`Pr` への変換と JSON の解析 `parse_search` / `parse_review` / `parse_custom` / `parse_one`) |
 | `src/infra/devin.rs` | Devin API v3 (`fetch_sessions`, `fetch_messages`, `send_message`) を curl で呼ぶ. JSON の解析 `parse_*` |
 | `src/infra/cache.rs` | PR 一覧と Devin session 一覧のディスクキャッシュの置き場所と読み書き |
-| `src/app/state.rs` | 全状態 `AppState`, タブ `Tab` とタブごとの一覧 `PrList`, 追加のタブ `CustomTab`, 会話ビューの `ChatView`, ラベル選択画面の `LabelMenu`, review 依頼の選択画面の `ReviewerMenu`, PR ビューの `PrView` |
+| `src/app/state.rs` | 全状態 `AppState`, タブ `Tab` とタブごとの一覧 `PrList`, 追加のタブ `CustomTab`, 一覧の上に開く画面 `Screen` とその積み `screens`, 会話ビューの `ChatView`, ラベル選択画面の `LabelMenu`, review 依頼の選択画面の `ReviewerMenu`, マージの確認画面の `MergeMenu`, PR ビューの `PrView` |
 | `src/app/event.rs` | `Event` (スレッドの結果), `Effect` (副作用の要求), `Action` (main への指示), `WatchUntil` |
 | `src/app/update/` | キー操作, イベント処理, 時間の遷移 (`tick`). `AppState` を更新して `Vec<Effect>` を返す純粋関数. `mod.rs` (`refresh`, `tick`, `handle_key` と一覧の操作), `event.rs` (`handle_event`), `chat.rs` (会話ビューのキー), `pr_view.rs` (PR ビューのキー, ページの切り替え, レビューの送信, 説明の編集), `label.rs` (ラベル選択画面のキー), `reviewer.rs` (review 依頼の選択画面のキー), `picker.rs` (2 つの選択画面で共通の絞り込みとカーソル移動) |
 | `src/app/ports.rs` | runtime が外とやりとりする trait (`Github`, `Git`, `Devin`, `CacheStore`, `Desktop`) とその束 `Ports`, 待ち時間の `RuntimeConfig`. テスト用の fake もここ |
@@ -112,6 +112,16 @@ runtime にも checkout の dirty チェック, watch の打ち切り, キャッ
 - `Cache` 型は serde の純データなので `domain/cache.rs` に移した. ports が infra に依存しないため
 - `--dump` は TUI を通らないので infra を直接呼ぶまま
 - ureq で curl を置き換える案は, エラー文言や TLS 依存が変わる設計変更なので見送った. やるなら `Devin` の adapter の差し替えで済む
+
+### 画面のスタック (2026-11-13)
+
+一覧の上に開く画面 (PR ビュー, 会話ビュー, コピー, ラベル, review 依頼, マージの確認) を, 画面ごとの `Option` から `AppState::screens: Vec<Screen>` の積みにした (ユーザーの指定). `Option` の並びではどれを前に出すかが `handle_key` と `draw` の `if` の順で暗に決まり, `Esc` も画面ごとに「閉じる」と書いていたので, PR ビューの diff のページで `Esc` を押すと説明とコメントのページを飛ばして一覧に戻っていた. 今後 PR ビューから会話ビューやマージの確認画面を開くような, 画面の上に別の画面を開く操作を足す前に寄せておいた.
+
+- 積むのは「どの画面の上に開いたか」で, 通った画面の履歴ではない. `d` のような画面の中のページの切り替えは積まず, 画面が自分の状態 (`PrView::page`) として持つ. 履歴にすると `d` を押すたびに積まれ, `Esc` で同じ 2 ページを行き来するため
+- `Esc` (と PR ビューと会話ビューの `q`) は, 画面の中に戻る先があればそこへ (diff のページ → 説明とコメントのページ, 1 行入力 → 会話ビュー), 無ければ `pop` で下の画面に戻る. 一覧の `Esc` は何もしない (以前は終了だった. 戻りすぎてアプリが終わらないよう `q` だけで終える)
+- キーは一番上の画面に渡す (`AppState::top`). 一覧のフッターの確認 (`u` の y/N, `DD`, `XX`, checkout の `--force`) は一覧に属する一時的な問いなので積まず, 今までどおりポップアップより先に見る. 積みに全画面の画面があれば (その上のポップアップでも) 見ない. フッターのメッセージも同じ
+- 描画は一番上の全画面の画面 (`Screen::is_full`. 無ければ一覧) を描き, その上に積んだポップアップを順に重ねる
+- 種類ごとの `pr_view()` / `pr_view_mut()` は積みの中で一番上にあるものを引く. `pop_pr_view()` などは一番上がその種類のときだけ閉じる (積みの途中を抜くと, その上に開いた画面が浮くため). `push` は中身の型 (`PrView` など) をそのまま受ける. どれも `state.rs` の `screen_accessors!` で作る. スレッドから届く結果は `pr_view_for(n)` / `chat_for(id)` で積み全体から番号か session ID で引き, 一番上でなくても反映する. 下に隠れた PR ビューの取得結果を失わないため
 
 ## 一覧の列
 
@@ -168,6 +178,7 @@ runtime にも checkout の dirty チェック, watch の打ち切り, キャッ
 - 2026-11-06: Devin と Linear の設定が無いとき, 空になるだけの Devin 列, 詳細欄の `devin:` 行, フッターの `v` と `l`, `c` の Linear issue の URL を出さないようにした (ユーザーの指定). `cargo test` 182 件通過. 未設定の画面は snapshot `without_devin_and_linear` で固定した
 
 - 2026-11-06: `RR` を review 依頼の選択画面 (`R`) にし, 名前つきの組 (`prtui.reviewer-set`) と, コメントだけした人への再依頼を足した (ユーザーの指定). `PrOp::Review` を外して `Effect::RequestReviews` / `Event::RequestedReviews` に分けた. clippy 0 件, fmt 通過, `cargo test` 202 件通過. 描画は snapshot `reviewer_menu` で固定した
+- 2026-11-13: 一覧の上の画面を `screens` の積みにした. clippy 0 件, fmt 通過, `cargo test` 268 件通過 (snapshot は変更なし). 仕上げに subagent に差分を評価させ, `take_*` を一番上だけ閉じる `pop_*` に, フッターの案内を一番上の画面の `match` に, イベントの画面の引き方を `pr_view_for` / `chat_for` に揃え, 全画面の画面の上のポップアップでは一覧の確認を見ないようにした. 検証用 repo の tmux で `p` → `d` → `Esc` で説明とコメントのページ, もう一度 `Esc` で一覧, 一覧の `Esc` で終わらないこと, `a` のラベル選択画面が一覧の上に出て `Esc` で閉じること, `q` で終わることを確認
 
 ## 未確認
 

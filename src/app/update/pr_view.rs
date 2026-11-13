@@ -13,16 +13,17 @@ pub(super) fn open_pr_view(state: &mut AppState) -> Vec<Effect> {
         return vec![];
     };
     let n = p.number;
-    state.pr_view = Some(PrView::new(p));
+    let view = PrView::new(p);
+    state.push(view);
     vec![Effect::FetchConversation(n)]
 }
 
 /// PR ビューのキー. スクロール, ページの切り替え (`d`), ブラウザ, 取り直し, レビュー (`!`),
-/// 説明の編集 (`e`), 閉じる. 説明とコメントのページではスレッドの選択 (`]`/`[`) と解決 (`x`),
+/// 説明の編集 (`e`), 戻る (`Esc`/`q`. diff のページなら説明とコメントのページへ, でなければ閉じる). 説明とコメントのページではスレッドの選択 (`]`/`[`) と解決 (`x`),
 /// diff のページでは横のスクロールとファイルの移動もする
 pub(super) fn pr_view_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
     let approve_body = state.local.approve_body.clone();
-    let Some(view) = state.pr_view.as_mut() else {
+    let Some(view) = state.pr_view_mut() else {
         return vec![];
     };
     view.notice = None;
@@ -80,8 +81,14 @@ pub(super) fn pr_view_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Char('e') if !view.is_sending() => return edit_body(view),
         KeyCode::Char('r') => return refetch(view),
+        // 直前の画面に戻る. diff のページからは説明とコメントのページへ
+        KeyCode::Esc | KeyCode::Char('q') if view.page == PrPage::Diff => {
+            view.page = PrPage::Conversation;
+        }
         // 送信中に閉じると結果を出す場所が無くなる
-        KeyCode::Esc | KeyCode::Char('q') if !view.is_sending() => state.pr_view = None,
+        KeyCode::Esc | KeyCode::Char('q') if !view.is_sending() => {
+            state.pop();
+        }
         _ => {}
     }
     vec![]
@@ -271,7 +278,7 @@ mod tests {
     use crate::domain::diff::Diff;
 
     fn view(s: &AppState) -> &PrView {
-        s.pr_view.as_ref().expect("pr_view")
+        s.pr_view().expect("pr_view")
     }
 
     fn conversation(body: &str) -> Conversation {
@@ -282,6 +289,15 @@ mod tests {
             vec![],
             0,
         )
+    }
+
+    #[test]
+    fn result_reaches_hidden_pr_view() {
+        let mut s = state(vec![pr(1)]);
+        handle_key(&mut s, key('p'));
+        s.push(crate::app::ChatView::default());
+        handle_event(&mut s, Event::FetchedConversation(1, Ok(conversation("x"))));
+        assert!(view(&s).conversation.is_some() && !view(&s).fetching);
     }
 
     #[test]
@@ -308,7 +324,7 @@ mod tests {
     fn open_without_pr_does_nothing() {
         let mut s = state(vec![]);
         assert!(handle_key(&mut s, key('p')).is_empty());
-        assert!(s.pr_view.is_none());
+        assert!(s.pr_view().is_none());
     }
 
     #[test]
@@ -342,9 +358,9 @@ mod tests {
 
         // 閉じた後に届いた結果は捨てる
         handle_key(&mut s, code(KeyCode::Esc));
-        assert!(s.pr_view.is_none());
+        assert!(s.pr_view().is_none());
         handle_event(&mut s, Event::FetchedConversation(1, Ok(conversation("x"))));
-        assert!(s.pr_view.is_none());
+        assert!(s.pr_view().is_none());
     }
 
     #[test]
@@ -352,7 +368,7 @@ mod tests {
         let mut s = state(vec![pr(1)]);
         handle_key(&mut s, key('p'));
         {
-            let v = s.pr_view.as_mut().unwrap();
+            let v = s.pr_view_mut().unwrap();
             v.max_scroll = 10;
             v.viewport_height = 6;
         }
@@ -403,7 +419,7 @@ mod tests {
         let mut s = state(vec![pr(1)]);
         handle_key(&mut s, key('p'));
         handle_event(&mut s, Event::FetchedConversation(1, Ok(with_threads())));
-        let v = s.pr_view.as_mut().unwrap();
+        let v = s.pr_view_mut().unwrap();
         v.thread_rows = vec![5, 12];
         v.max_scroll = 10;
         s
@@ -441,7 +457,7 @@ mod tests {
 
         // 選んでいなければ [ は画面の先頭より前の最後のスレッド
         let mut s = thread_state();
-        s.pr_view.as_mut().unwrap().scroll = 8;
+        s.pr_view_mut().unwrap().scroll = 8;
         handle_key(&mut s, key('['));
         assert_eq!(view(&s).thread.as_deref(), Some("T1"));
     }
@@ -462,7 +478,7 @@ mod tests {
         // 解決中は閉じず, 重ねない
         assert!(handle_key(&mut s, key('x')).is_empty());
         handle_key(&mut s, key('q'));
-        assert!(s.pr_view.is_some());
+        assert!(s.pr_view().is_some());
 
         // 自分タブの PR なら一覧の未解決の数を取り直す
         let effects = handle_event(
@@ -516,7 +532,7 @@ mod tests {
     #[test]
     fn resolve_in_review_tab_skips_list_reload() {
         let mut s = opened(10);
-        s.pr_view.as_mut().unwrap().conversation = Some(with_threads());
+        s.pr_view_mut().unwrap().conversation = Some(with_threads());
         handle_key(&mut s, key(']'));
         handle_key(&mut s, key('x'));
         let effects = handle_event(
@@ -558,6 +574,12 @@ mod tests {
         assert!(handle_key(&mut s, key('d')).is_empty());
         assert_eq!(view(&s).page, PrPage::Conversation);
         assert!(handle_key(&mut s, key('d')).is_empty());
+        // Esc と q は diff のページから説明とコメントのページに戻る (閉じない)
+        for k in [code(KeyCode::Esc), key('q')] {
+            assert!(handle_key(&mut s, k).is_empty());
+            assert_eq!(view(&s).page, PrPage::Conversation);
+            assert!(handle_key(&mut s, key('d')).is_empty());
+        }
         // r は表示中のページを取り直す
         assert_eq!(handle_key(&mut s, key('r')), vec![Effect::FetchDiff(1)]);
         handle_event(
@@ -579,7 +601,7 @@ mod tests {
         handle_key(&mut s, key('d'));
         handle_event(&mut s, Event::FetchedDiff(1, Ok(diff())));
         {
-            let v = s.pr_view.as_mut().unwrap();
+            let v = s.pr_view_mut().unwrap();
             v.max_scroll = 10;
             v.diff.max_scroll = 6;
             v.diff.max_x = 20;
@@ -653,7 +675,7 @@ mod tests {
         assert!(view(&s).submitting && view(&s).composing.is_none());
         // 送信中は閉じない
         handle_key(&mut s, key('q'));
-        assert!(s.pr_view.is_some());
+        assert!(s.pr_view().is_some());
 
         let effects = handle_event(
             &mut s,
@@ -761,7 +783,7 @@ mod tests {
         handle_key(&mut s, key('p'));
         assert_eq!(handle_key(&mut s, key('o')), vec![Effect::ViewWeb(3)]);
         assert!(handle_key(&mut s, key('q')).is_empty());
-        assert!(s.pr_view.is_none());
+        assert!(s.pr_view().is_none());
         // Ctrl-C は常に終了
         handle_key(&mut s, key('p'));
         let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
@@ -807,7 +829,7 @@ mod tests {
         for c in ['q', '!', 'e'] {
             assert!(handle_key(&mut s, key(c)).is_empty());
         }
-        assert!(s.pr_view.is_some() && !view(&s).choosing_review);
+        assert!(s.pr_view().is_some() && !view(&s).choosing_review);
 
         let effects = handle_event(
             &mut s,

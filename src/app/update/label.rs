@@ -17,7 +17,8 @@ pub(super) fn open_labels(state: &mut AppState) -> Vec<Effect> {
     let Some(pr) = state.selected() else {
         return vec![];
     };
-    state.label_menu = Some(LabelMenu::new(pr.number, pr.label_names()));
+    let menu = LabelMenu::new(pr.number, pr.label_names());
+    state.push(menu);
     if state.labels_loading {
         return vec![];
     }
@@ -27,11 +28,13 @@ pub(super) fn open_labels(state: &mut AppState) -> Vec<Effect> {
 
 pub(super) fn label_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
     let len = state.label_choices().len();
-    let Some(menu) = state.label_menu.as_mut() else {
+    let Some(menu) = state.label_menu_mut() else {
         return vec![];
     };
     match key.code {
-        KeyCode::Esc => state.label_menu = None,
+        KeyCode::Esc => {
+            state.pop();
+        }
         KeyCode::Enter => return apply(state),
         KeyCode::Tab => toggle_cursor(state),
         _ => {
@@ -44,7 +47,7 @@ pub(super) fn label_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
 /// 選択肢の数が変わったときにカーソルを範囲に収める
 pub(super) fn clamp_cursor(state: &mut AppState) {
     let len = state.label_choices().len();
-    if let Some(menu) = state.label_menu.as_mut() {
+    if let Some(menu) = state.label_menu_mut() {
         clamp(&mut menu.list, len);
     }
 }
@@ -60,7 +63,7 @@ fn toggle(chosen: &mut Vec<String>, name: &str) {
 /// カーソルの項目を切り替えて次に進む. 末尾では止まる
 fn toggle_cursor(state: &mut AppState) {
     let choices = state.label_choices();
-    let Some(menu) = state.label_menu.as_mut() else {
+    let Some(menu) = state.label_menu_mut() else {
         return;
     };
     let cur = menu.list.selected().unwrap_or(0);
@@ -81,7 +84,7 @@ pub(super) fn diff_text(add: &[String], remove: &[String]) -> String {
 
 fn apply(state: &mut AppState) -> Vec<Effect> {
     let choices = state.label_choices();
-    let Some(menu) = state.label_menu.as_mut() else {
+    let Some(menu) = state.label_menu_mut() else {
         return vec![];
     };
     if same_labels(&menu.chosen, &menu.before) {
@@ -91,7 +94,7 @@ fn apply(state: &mut AppState) -> Vec<Effect> {
         };
         toggle(&mut menu.chosen, &l.name);
     }
-    let Some(menu) = state.label_menu.take() else {
+    let Some(menu) = state.pop_label_menu() else {
         return vec![];
     };
     let n = menu.number;
@@ -150,7 +153,7 @@ mod tests {
     }
 
     fn cursor(s: &AppState) -> Option<usize> {
-        s.label_menu.as_ref().unwrap().list.selected()
+        s.label_menu().unwrap().list.selected()
     }
 
     #[test]
@@ -158,7 +161,7 @@ mod tests {
         let mut s = labeled();
         assert_eq!(handle_key(&mut s, key('a')), vec![Effect::FetchLabels]);
         assert!(s.labels_loading);
-        let menu = s.label_menu.as_ref().unwrap();
+        let menu = s.label_menu().unwrap();
         assert_eq!(menu.number, 1);
         assert_eq!(menu.before, ["bug"]);
         // 付いているものが先, 残りは名前順
@@ -166,9 +169,9 @@ mod tests {
 
         // 取得中に開き直しても取りに行かない
         handle_key(&mut s, code(KeyCode::Esc));
-        assert!(s.label_menu.is_none());
+        assert!(s.label_menu().is_none());
         assert!(handle_key(&mut s, key('a')).is_empty());
-        assert!(s.label_menu.is_some());
+        assert!(s.label_menu().is_some());
     }
 
     #[test]
@@ -188,7 +191,7 @@ mod tests {
         type_str(&mut s, "q");
         assert!(names(&s).is_empty());
         handle_key(&mut s, ctrl('u'));
-        assert_eq!(s.label_menu.as_ref().unwrap().query, "");
+        assert_eq!(s.label_menu().unwrap().query, "");
     }
 
     #[test]
@@ -211,7 +214,7 @@ mod tests {
         handle_key(&mut s, code(KeyCode::Tab));
         handle_key(&mut s, code(KeyCode::Tab));
         assert_eq!(cursor(&s), Some(2));
-        assert_eq!(s.label_menu.as_ref().unwrap().chosen, ["docs"]);
+        assert_eq!(s.label_menu().unwrap().chosen, ["docs"]);
         assert_eq!(
             handle_key(&mut s, code(KeyCode::Enter)),
             vec![Effect::EditLabels {
@@ -220,7 +223,7 @@ mod tests {
                 remove: vec!["bug".into()],
             }]
         );
-        assert!(s.label_menu.is_none());
+        assert!(s.label_menu().is_none());
         assert_eq!(
             s.busy.as_deref(),
             Some("#1 のラベルを変えている… +docs -bug")
@@ -248,7 +251,7 @@ mod tests {
         handle_key(&mut s, key('a'));
         type_str(&mut s, "zzz");
         assert!(handle_key(&mut s, code(KeyCode::Enter)).is_empty());
-        assert!(s.label_menu.is_some());
+        assert!(s.label_menu().is_some());
         assert!(s.busy.is_none());
     }
 
@@ -258,7 +261,7 @@ mod tests {
         handle_key(&mut s, key('3'));
         assert!(handle_key(&mut s, key('a')).is_empty());
         assert_eq!(message(&s), ("a はマージ予定タブでは使えない", true));
-        assert!(s.label_menu.is_none());
+        assert!(s.label_menu().is_none());
     }
 
     #[test]
@@ -266,7 +269,7 @@ mod tests {
         let mut s = labeled();
         s.busy = Some("…".into());
         assert!(handle_key(&mut s, key('a')).is_empty());
-        assert!(s.label_menu.is_none());
+        assert!(s.label_menu().is_none());
     }
 
     #[test]
@@ -291,7 +294,7 @@ mod tests {
             Event::FetchedLabels(Err(anyhow::anyhow!("HTTP 502"))),
         );
         assert_eq!(
-            s.label_menu.as_ref().unwrap().error.as_deref(),
+            s.label_menu().unwrap().error.as_deref(),
             Some("ラベル一覧の取得失敗: HTTP 502")
         );
         // 以前の一覧は残す

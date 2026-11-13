@@ -3,7 +3,7 @@ use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 
-use crate::app::AppState;
+use crate::app::{AppState, Screen};
 use crate::domain::devin::{DevinSession, DevinStatus};
 use crate::domain::label::Label;
 
@@ -89,15 +89,27 @@ pub(super) fn popup_area(area: Rect, rows: u16) -> Rect {
     popup
 }
 
+/// 一番上の全画面の画面 (無ければ一覧) を描き, その上に開いたポップアップを開いた順に重ねる
 pub fn draw(f: &mut Frame, state: &mut AppState) {
-    if state.chat.is_some() {
-        draw_chat(f, state);
-        return;
+    let base = state.screens.iter().rposition(Screen::is_full);
+    match base.map(|i| &state.screens[i]) {
+        Some(Screen::Chat(_)) => draw_chat(f, state),
+        Some(Screen::PrView(_)) => draw_pr_view(f, state),
+        _ => draw_list(f, state),
     }
-    if state.pr_view.is_some() {
-        draw_pr_view(f, state);
-        return;
+    let popups = base.map_or(0, |i| i + 1)..state.screens.len();
+    for i in popups {
+        match &state.screens[i] {
+            Screen::Copy(items) => draw_copy_menu(f, items, f.area()),
+            Screen::Labels(_) => draw_label_menu(f, state, f.area()),
+            Screen::Reviewers(_) => draw_reviewer_menu(f, state, f.area()),
+            Screen::Merge(_) => draw_merge_menu(f, state, f.area()),
+            Screen::Chat(_) | Screen::PrView(_) => {}
+        }
     }
+}
+
+fn draw_list(f: &mut Frame, state: &mut AppState) {
     // タブは設定で増えるので, ヘッダとは別の行に並べて切れないようにする
     let [header, tabs, list, detail, footer] = Layout::vertical([
         Constraint::Length(1),
@@ -113,18 +125,6 @@ pub fn draw(f: &mut Frame, state: &mut AppState) {
     draw_table(f, state, list);
     f.render_widget(detail_view(state), detail);
     f.render_widget(footer_line(state), footer);
-    if let Some(items) = &state.copy_menu {
-        draw_copy_menu(f, items, f.area());
-    }
-    if state.label_menu.is_some() {
-        draw_label_menu(f, state, f.area());
-    }
-    if state.reviewer_menu.is_some() {
-        draw_reviewer_menu(f, state, f.area());
-    }
-    if state.merge_menu.is_some() {
-        draw_merge_menu(f, state, f.area());
-    }
 }
 
 fn header_line(state: &AppState) -> Line<'static> {
@@ -202,37 +202,22 @@ fn footer_line(state: &AppState) -> Line<'static> {
             .bold(),
         );
     }
-    if state.merge_menu.is_some() {
-        return Line::from(
-            Span::raw(" 方法のキーでマージ  Enter 前回と同じ方法  他のキーで取りやめ")
-                .yellow()
-                .bold(),
-        );
-    }
-    if state.copy_menu.is_some() {
-        return Line::from(
-            Span::raw(" コピーする項目のキーを押す. 他のキーで閉じる")
-                .yellow()
-                .bold(),
-        );
-    }
-    if state.label_menu.is_some() {
-        return Line::from(
-            Span::raw(
-                " 文字で絞り込み  ↑↓ 移動  Tab 付け外しを選ぶ  Enter 反映 (選んでいなければカーソルの項目を切り替え)  Esc 閉じる",
-            )
-            .yellow()
-            .bold(),
-        );
-    }
-    if state.reviewer_menu.is_some() {
-        return Line::from(
-            Span::raw(
-                " 文字で絞り込み  ↑↓ 移動  Tab 依頼する相手を選ぶ (組はメンバー全員)  Enter 依頼 (選んでいなければカーソルの項目)  Esc 閉じる",
-            )
-            .yellow()
-            .bold(),
-        );
+    // 一番上のポップアップの操作の案内
+    let hint = match state.top() {
+        Some(Screen::Merge(_)) => {
+            Some(" 方法のキーでマージ  Enter 前回と同じ方法  他のキーで取りやめ")
+        }
+        Some(Screen::Copy(_)) => Some(" コピーする項目のキーを押す. 他のキーで閉じる"),
+        Some(Screen::Labels(_)) => Some(
+            " 文字で絞り込み  ↑↓ 移動  Tab 付け外しを選ぶ  Enter 反映 (選んでいなければカーソルの項目を切り替え)  Esc 閉じる",
+        ),
+        Some(Screen::Reviewers(_)) => Some(
+            " 文字で絞り込み  ↑↓ 移動  Tab 依頼する相手を選ぶ (組はメンバー全員)  Enter 依頼 (選んでいなければカーソルの項目)  Esc 閉じる",
+        ),
+        Some(Screen::PrView(_) | Screen::Chat(_)) | None => None,
+    };
+    if let Some(hint) = hint {
+        return Line::from(Span::raw(hint).yellow().bold());
     }
     if let Some(m) = &state.message {
         let span = Span::raw(format!(" {}", m.text));
@@ -682,13 +667,13 @@ mod tests {
         lines.push(footer(&mut s));
         s.error("チェックアウト失敗: 未コミットの変更がある".into());
         lines.push(footer(&mut s));
-        s.reviewer_menu = Some(ReviewerMenu::new(1));
+        s.push(ReviewerMenu::new(1));
         lines.push(footer(&mut s));
-        s.label_menu = Some(LabelMenu::new(1, vec![]));
+        s.push(LabelMenu::new(1, vec![]));
         lines.push(footer(&mut s));
-        s.copy_menu = Some(vec![]);
+        s.push(vec![]);
         lines.push(footer(&mut s));
-        s.merge_menu = Some(MergeMenu {
+        s.push(MergeMenu {
             number: 1,
             head_oid: "oid-1".into(),
         });
@@ -725,7 +710,7 @@ mod tests {
         let mut menu = LabelMenu::new(1, vec!["feature".into()]);
         menu.chosen = vec!["docs".into()];
         menu.list.select(Some(2));
-        s.label_menu = Some(menu);
+        s.push(menu);
         let term = terminal(&mut s);
         insta::assert_snapshot!(screen(&term));
         let styles = styles(&term);
@@ -748,7 +733,7 @@ mod tests {
         let mut menu = ReviewerMenu::new(1);
         menu.chosen = vec!["carol".into(), "bob".into()];
         menu.list.select(Some(2));
-        s.reviewer_menu = Some(menu);
+        s.push(menu);
         let term = terminal(&mut s);
         insta::assert_snapshot!(screen(&term));
         let styles = styles(&term);
@@ -765,7 +750,7 @@ mod tests {
         let mut s = state();
         let mut menu = ReviewerMenu::new(1);
         menu.query = "zz".into();
-        s.reviewer_menu = Some(menu);
+        s.push(menu);
         insta::assert_snapshot!(screen(&terminal(&mut s)));
     }
 
@@ -793,7 +778,7 @@ mod tests {
         let mut menu = LabelMenu::new(1, vec![]);
         menu.query = "zz".into();
         menu.error = Some("ラベル一覧の取得失敗: HTTP 502".into());
-        s.label_menu = Some(menu);
+        s.push(menu);
         insta::assert_snapshot!(screen(&terminal(&mut s)));
     }
 
@@ -817,7 +802,7 @@ mod tests {
             MergeMethod::ALL.to_vec(),
             Some(MergeMethod::Squash),
         ));
-        s.merge_menu = Some(MergeMenu {
+        s.push(MergeMenu {
             number: 2,
             head_oid: "oid-2".into(),
         });
@@ -836,7 +821,7 @@ mod tests {
     #[test]
     fn merge_menu_ready_and_loading() {
         let mut s = state();
-        s.merge_menu = Some(MergeMenu {
+        s.push(MergeMenu {
             number: 1,
             head_oid: "oid-1".into(),
         });
@@ -846,7 +831,7 @@ mod tests {
     #[test]
     fn copy_menu() {
         let mut s = state();
-        s.copy_menu = Some(copy_items(s.selected().unwrap(), Some("acme")));
+        s.push(copy_items(s.selected().unwrap(), Some("acme")));
         insta::assert_snapshot!(screen(&terminal(&mut s)));
     }
 
@@ -908,11 +893,11 @@ mod tests {
         let mut view = PrView::new(&p);
         view.conversation = Some(conversation());
         view.fetching = false;
-        s.pr_view = Some(view);
+        s.push(view);
         let term = terminal(&mut s);
         insta::assert_snapshot!(screen(&term));
         insta::assert_snapshot!("pr_view_styles", styles(&term));
-        let v = s.pr_view.as_ref().unwrap();
+        let v = s.pr_view().unwrap();
         // 2 行のヘッダの下の 27 行の欄に 28 行なので, 最後の 1 行はスクロールで出す
         assert_eq!((v.viewport_height, v.max_scroll), (27, 1));
         // スレッドの見出しの位置
@@ -930,13 +915,13 @@ mod tests {
         view.conversation = Some(conversation());
         view.fetching = false;
         view.thread = Some("T_b".into());
-        s.pr_view = Some(view);
+        s.push(view);
         let term = terminal(&mut s);
-        let row = 2 + s.pr_view.as_ref().unwrap().thread_rows[1] as u16;
+        let row = 2 + s.pr_view().unwrap().thread_rows[1] as u16;
         // 選んだスレッドの見出しだけ背景を付ける
         let bg = |y: u16| term.backend().buffer()[(0, y)].style().bg;
         assert_eq!(bg(row), Some(SELECTED_BG));
-        let other = 2 + s.pr_view.as_ref().unwrap().thread_rows[0] as u16;
+        let other = 2 + s.pr_view().unwrap().thread_rows[0] as u16;
         assert_eq!(bg(other), Some(Color::Reset));
     }
 
@@ -973,17 +958,17 @@ mod tests {
              diff --git a/img.png b/img.png\n\
              Binary files a/img.png and b/img.png differ\n"
         )));
-        s.pr_view = Some(view);
+        s.push(view);
         let term = terminal(&mut s);
         insta::assert_snapshot!(screen(&term));
         insta::assert_snapshot!("pr_view_diff_styles", styles(&term));
-        let v = &s.pr_view.as_ref().unwrap().diff;
+        let v = &s.pr_view().unwrap().diff;
         assert_eq!(v.max_scroll, 0);
         // 一番長い行 (+let b = 3; // x…) が 215 桁で, 欄の幅が 160
         assert_eq!(v.max_x, 55);
 
         // 横に送っても見出しは動かない
-        s.pr_view.as_mut().unwrap().diff.x = 10;
+        s.pr_view_mut().unwrap().diff.x = 10;
         let rows = screen(&terminal(&mut s));
         let rows: Vec<&str> = rows.lines().collect();
         assert!(rows[2].starts_with("── src/a.rs  +1 -1 "));
@@ -996,9 +981,9 @@ mod tests {
         let mut view = PrView::new(&Pr::fixture(1, "feature/base", "main"));
         view.page = PrPage::Diff;
         view.diff.fetching = true;
-        s.pr_view = Some(view);
+        s.push(view);
         assert_eq!(screen(&terminal(&mut s)).lines().nth(2), Some("取得中…"));
-        let v = s.pr_view.as_mut().unwrap();
+        let v = s.pr_view_mut().unwrap();
         v.diff.fetching = false;
         v.diff.diff = Some(Diff::default());
         assert_eq!(screen(&terminal(&mut s)).lines().nth(2), Some("差分なし"));
@@ -1011,7 +996,7 @@ mod tests {
         p.title = "ABC-1 土台を足す".into();
         p.author = "katshun".into();
         p.is_draft = true;
-        s.pr_view = Some(PrView::new(&p));
+        s.push(PrView::new(&p));
         let rows = screen(&terminal(&mut s));
         let rows: Vec<&str> = rows.lines().collect();
         // 件数は取得してから出す
@@ -1019,7 +1004,7 @@ mod tests {
         assert_eq!(rows[1].trim_end(), " katshun  feature/base → main");
         assert_eq!(rows[2], "取得中…");
 
-        let v = s.pr_view.as_mut().unwrap();
+        let v = s.pr_view_mut().unwrap();
         v.fetching = false;
         v.error = Some("取得失敗: boom".into());
         assert_eq!(footer(&mut s), " 取得失敗: boom");

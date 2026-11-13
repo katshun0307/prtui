@@ -26,10 +26,11 @@ pub(super) fn open_merge(state: &mut AppState) -> Vec<Effect> {
         state.error(format!("#{n} はコンフリクトしているのでマージできない"));
         return vec![];
     }
-    state.merge_menu = Some(MergeMenu {
+    let menu = MergeMenu {
         number: n,
         head_oid: pr.head_ref_oid.clone(),
-    });
+    };
+    state.push(menu);
     if state.merge_settings.is_some() || state.merge_settings_loading {
         return vec![];
     }
@@ -39,7 +40,7 @@ pub(super) fn open_merge(state: &mut AppState) -> Vec<Effect> {
 
 /// 方法が決まればマージし, 決まらなければ閉じる. 方法の取得中は方法のキーも取りやめになる
 pub(super) fn merge_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
-    let Some(menu) = state.merge_menu.take() else {
+    let Some(menu) = state.pop_merge_menu() else {
         return vec![];
     };
     let method = state
@@ -96,8 +97,8 @@ mod tests {
             vec![Effect::FetchMergeSettings]
         );
         assert_eq!(
-            s.merge_menu,
-            Some(MergeMenu {
+            s.merge_menu(),
+            Some(&MergeMenu {
                 number: 1,
                 head_oid: "oid1".into()
             })
@@ -110,7 +111,7 @@ mod tests {
         // 2 回目は取り直さない
         handle_key(&mut s, code(KeyCode::Esc));
         assert!(handle_key(&mut s, key('M')).is_empty());
-        assert!(s.merge_menu.is_some());
+        assert!(s.merge_menu().is_some());
     }
 
     #[test]
@@ -126,7 +127,7 @@ mod tests {
                 head_oid: "oid1".into(),
             }]
         );
-        assert!(s.merge_menu.is_none());
+        assert!(s.merge_menu().is_none());
         assert_eq!(s.busy.as_deref(), Some("#1 を squash でマージしている…"));
     }
 
@@ -161,7 +162,7 @@ mod tests {
             s.merge_settings_loading = s.merge_settings.is_none();
             handle_key(&mut s, key('M'));
             assert!(handle_key(&mut s, k).is_empty(), "{k:?}");
-            assert!(s.merge_menu.is_none());
+            assert!(s.merge_menu().is_none());
             assert!(s.busy.is_none());
             assert_eq!(message(&s), ("#1 のマージを取りやめた", false));
         }
@@ -185,7 +186,7 @@ mod tests {
             message(&s),
             ("#2 はコンフリクトしているのでマージできない", true)
         );
-        assert!(s.merge_menu.is_none());
+        assert!(s.merge_menu().is_none());
     }
 
     #[test]
@@ -196,7 +197,7 @@ mod tests {
             &mut s,
             Event::FetchedMergeSettings(Err(anyhow::anyhow!("HTTP 502"))),
         );
-        assert!(s.merge_menu.is_none() && s.merge_settings.is_none());
+        assert!(s.merge_menu().is_none() && s.merge_settings.is_none());
         assert!(!s.merge_settings_loading);
         assert_eq!(message(&s), ("マージ方法の取得失敗: HTTP 502", true));
         // 次に開いたら取り直す

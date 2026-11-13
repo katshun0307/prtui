@@ -15,10 +15,10 @@ use crate::domain::review::{ReviewerChoice, same_login};
 /// 詳細欄の reviewers と同じ配色で後ろに出す
 pub(super) fn draw_reviewer_menu(f: &mut Frame, state: &mut AppState, area: Rect) {
     let choices = state.reviewer_choices();
-    let Some(menu) = state.reviewer_menu.as_ref() else {
+    let Some(menu) = state.reviewer_menu() else {
         return;
     };
-    let Some(pr) = state.mine.prs.iter().find(|p| p.number == menu.number) else {
+    let Some(pr) = state.pr(menu.number) else {
         return;
     };
     let name = |c: &ReviewerChoice| match c {
@@ -88,7 +88,7 @@ pub(super) fn draw_reviewer_menu(f: &mut Frame, state: &mut AppState, area: Rect
         input,
     );
     f.render_widget(Paragraph::new(status_lines), status_area);
-    let Some(menu) = state.reviewer_menu.as_mut() else {
+    let Some(menu) = state.reviewer_menu_mut() else {
         return;
     };
     f.render_stateful_widget(

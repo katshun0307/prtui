@@ -12,7 +12,7 @@ use crate::domain::pr::Pr;
 
 /// Devin session との会話ビューを全画面に描く. scroll の上限と欄の高さを `ChatView` に書く
 pub(super) fn draw_chat(f: &mut Frame, state: &mut AppState) {
-    let Some(chat) = &state.chat else {
+    let Some(chat) = state.chat() else {
         return;
     };
     let pr = state.pr(chat.number);
@@ -20,9 +20,9 @@ pub(super) fn draw_chat(f: &mut Frame, state: &mut AppState) {
     render_chat(f, f.area(), header, state);
 }
 
-/// ヘッダ以外を `state.chat` だけで描く. `chat_session` を呼ばずにテストできるように分けてある
+/// ヘッダ以外を `state.chat()` だけで描く. `chat_session` を呼ばずにテストできるように分けてある
 fn render_chat(f: &mut Frame, area: Rect, header: Line<'static>, state: &mut AppState) {
-    let Some(chat) = state.chat.as_mut() else {
+    let Some(chat) = state.chat_mut() else {
         return;
     };
     // 入力欄は折り返して高さを行数に合わせる. 画面の半分を超える分は, 入力位置の行が下端に来るように先頭を隠す
@@ -219,8 +219,8 @@ mod tests {
     /// 会話ビューを開いて messages を取得済みにした状態. `ChatView` は app の外から名前で呼べないので Default から作る
     fn state(messages: Vec<DevinMessage>) -> AppState {
         let mut s = AppState::new(PathBuf::from("/tmp"), "o/r".into(), LocalState::default());
-        s.chat = Some(Default::default());
-        let chat = s.chat.as_mut().unwrap();
+        s.push(crate::app::ChatView::default());
+        let chat = s.chat_mut().unwrap();
         chat.session_id = "devin-1".into();
         chat.messages = messages;
         chat.loaded = true;
@@ -378,7 +378,7 @@ mod tests {
         let mut s = state(five_messages());
         // 5 件 × 3 行 = 15 行. 高さ 8 からヘッダとフッターを引いて欄は 6 行
         let rows = render(&mut s, 30, 8);
-        let chat = s.chat.as_ref().unwrap();
+        let chat = s.chat().unwrap();
         assert_eq!(chat.viewport_height, 6);
         assert_eq!(chat.max_scroll, 9);
         assert_eq!(rows[0], " header");
@@ -391,11 +391,11 @@ mod tests {
     #[test]
     fn render_scroll_is_clamped() {
         let mut s = state(five_messages());
-        s.chat.as_mut().unwrap().scroll = Some(0);
+        s.chat_mut().unwrap().scroll = Some(0);
         let rows = render(&mut s, 30, 8);
         assert!(rows[1].starts_with("Devin"), "{rows:?}");
         assert_eq!(rows[2], "m0");
-        s.chat.as_mut().unwrap().scroll = Some(100);
+        s.chat_mut().unwrap().scroll = Some(100);
         let rows = render(&mut s, 30, 8);
         assert_eq!(rows[5], "m4");
     }
@@ -403,12 +403,12 @@ mod tests {
     #[test]
     fn render_counts_wrapped_lines_and_input_row() {
         let mut s = state(vec![message(true, None, &"x".repeat(25))]);
-        let chat = s.chat.as_mut().unwrap();
+        let chat = s.chat_mut().unwrap();
         chat.typing = true;
         chat.set_draft("hi".into());
         // 幅 20 で本文 25 文字は 2 行. 発言者と空行を足して 4 行. 欄は 6 - 3 = 3 行
         let rows = render(&mut s, 20, 6);
-        let chat = s.chat.as_ref().unwrap();
+        let chat = s.chat().unwrap();
         assert_eq!(chat.viewport_height, 3);
         assert_eq!(chat.max_scroll, 1);
         assert_eq!(rows[4], ">\u{a0}hi█");
@@ -418,12 +418,12 @@ mod tests {
     #[test]
     fn render_wraps_long_input() {
         let mut s = state(five_messages());
-        let chat = s.chat.as_mut().unwrap();
+        let chat = s.chat_mut().unwrap();
         chat.typing = true;
         chat.set_draft("a".repeat(25));
         // "> " + 25 文字 + "█" = 28 文字は幅 20 で 2 行. 欄は 8 - 2 - 2 = 4 行
         let rows = render(&mut s, 20, 8);
-        assert_eq!(s.chat.as_ref().unwrap().viewport_height, 4);
+        assert_eq!(s.chat().unwrap().viewport_height, 4);
         assert_eq!(rows[5], format!(">\u{a0}{}", "a".repeat(18)));
         assert_eq!(rows[6], format!("{}█", "a".repeat(7)));
         assert!(rows[7].contains("Enter"), "{rows:?}");
@@ -432,12 +432,12 @@ mod tests {
     #[test]
     fn render_long_input_is_capped_and_shows_tail() {
         let mut s = state(five_messages());
-        let chat = s.chat.as_mut().unwrap();
+        let chat = s.chat_mut().unwrap();
         chat.typing = true;
         chat.set_draft(format!("{}z", "a".repeat(99)));
         // 103 文字は幅 20 で 6 行. 高さ 8 の半分の 4 行に抑え, 末尾を出す
         let rows = render(&mut s, 20, 8);
-        assert_eq!(s.chat.as_ref().unwrap().viewport_height, 2);
+        assert_eq!(s.chat().unwrap().viewport_height, 2);
         assert_eq!(rows[3], "a".repeat(20));
         assert_eq!(rows[6], "az█");
         assert!(rows[7].contains("Enter"), "{rows:?}");
@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn render_long_input_shows_cursor_line() {
         let mut s = state(five_messages());
-        let chat = s.chat.as_mut().unwrap();
+        let chat = s.chat_mut().unwrap();
         chat.typing = true;
         chat.set_draft(format!("{}z", "a".repeat(99)));
         chat.cursor = 0;

@@ -224,6 +224,88 @@ pub struct MergeMenu {
     pub head_oid: String,
 }
 
+/// 一覧の上に重ねて開く画面. `AppState::screens` に開いた順に積む.
+/// `Esc` は一番上を閉じて, その下の画面 (無ければ一覧) に戻る.
+/// 開くのは高々数個なので, 大きさの違う variant を Box に入れずに持つ
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
+pub enum Screen {
+    /// `p` で開く PR ビュー. 全画面
+    PrView(PrView),
+    /// `v` で開く Devin session の会話ビュー. 全画面
+    Chat(ChatView),
+    /// `c` で開くコピー選択画面の項目. 開いたときの PR から作る. ポップアップ
+    Copy(Vec<CopyItem>),
+    /// `a` で開くラベルの選択画面. ポップアップ
+    Labels(LabelMenu),
+    /// `R` で開く review 依頼の選択画面. ポップアップ
+    Reviewers(ReviewerMenu),
+    /// `M` で開くマージの確認画面. ポップアップ
+    Merge(MergeMenu),
+}
+
+impl Screen {
+    /// 下の画面を隠す全画面. ポップアップは下の画面の上に重ねて描く
+    pub fn is_full(&self) -> bool {
+        matches!(self, Screen::PrView(_) | Screen::Chat(_))
+    }
+}
+
+/// `Screen` の種類ごとに, 積みの中で一番上にあるものを引く `$get` / `$get_mut` と,
+/// 一番上がその種類のときだけ閉じて中身を返す `$pop`, `push` に渡すための `From` を作る
+macro_rules! screen_accessors {
+    ($($variant:ident: $ty:ty => $get:ident, $get_mut:ident, $pop:ident;)*) => {
+        $(
+            impl From<$ty> for Screen {
+                fn from(v: $ty) -> Self {
+                    Screen::$variant(v)
+                }
+            }
+        )*
+
+        impl AppState {
+            $(
+                #[allow(dead_code)]
+                pub fn $get(&self) -> Option<&$ty> {
+                    self.screens.iter().rev().find_map(|s| match s {
+                        Screen::$variant(v) => Some(v),
+                        _ => None,
+                    })
+                }
+
+                #[allow(dead_code)]
+                pub fn $get_mut(&mut self) -> Option<&mut $ty> {
+                    self.screens.iter_mut().rev().find_map(|s| match s {
+                        Screen::$variant(v) => Some(v),
+                        _ => None,
+                    })
+                }
+
+                /// 一番上が別の画面なら何もしない. 積みの途中を抜くと, その上に開いた画面が浮くため
+                #[allow(dead_code)]
+                pub fn $pop(&mut self) -> Option<$ty> {
+                    match self.screens.pop() {
+                        Some(Screen::$variant(v)) => Some(v),
+                        other => {
+                            self.screens.extend(other);
+                            None
+                        }
+                    }
+                }
+            )*
+        }
+    };
+}
+
+screen_accessors! {
+    PrView: PrView => pr_view, pr_view_mut, pop_pr_view;
+    Chat: ChatView => chat, chat_mut, pop_chat;
+    Copy: Vec<CopyItem> => copy_menu, copy_menu_mut, pop_copy_menu;
+    Labels: LabelMenu => label_menu, label_menu_mut, pop_label_menu;
+    Reviewers: ReviewerMenu => reviewer_menu, reviewer_menu_mut, pop_reviewer_menu;
+    Merge: MergeMenu => merge_menu, merge_menu_mut, pop_merge_menu;
+}
+
 /// 一覧のタブ
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
@@ -332,17 +414,12 @@ pub struct AppState {
     pub confirm_force_checkout: Option<(u64, String)>,
     /// 2 回目のキー入力待ちの状態変更 (draft, close)
     pub confirm_op: Option<(u64, PrOp)>,
-    /// `c` で開いたコピー選択画面の項目. 開いたときの PR から作る
-    pub copy_menu: Option<Vec<CopyItem>>,
-    /// `a` で開いたラベルの選択画面
-    pub label_menu: Option<LabelMenu>,
-    /// `R` で開いた review 依頼の選択画面
-    pub reviewer_menu: Option<ReviewerMenu>,
+    /// 一覧の上に開いた画面. 後ろほど上. 空なら一覧を出す.
+    /// 種類ごとの `pr_view()` や `label_menu()` は一番上にあるものを引く
+    pub screens: Vec<Screen>,
     /// repo のラベル. 選択画面を開くたびに取り直す
     pub repo_labels: Vec<Label>,
     pub labels_loading: bool,
-    /// `M` で開いたマージの確認画面
-    pub merge_menu: Option<MergeMenu>,
     /// repo で許可されたマージ方法. 確認画面を初めて開いたときに取り, 以後は取り直さない
     pub merge_settings: Option<MergeSettings>,
     pub merge_settings_loading: bool,
@@ -353,10 +430,6 @@ pub struct AppState {
     pub devin_sessions: Vec<DevinSession>,
     /// Devin session 一覧を取得中. PR の取得 (`loading`) とは独立
     pub sessions_loading: bool,
-    /// 会話ビューを開いていれば Some
-    pub chat: Option<ChatView>,
-    /// PR ビューを開いていれば Some
-    pub pr_view: Option<PrView>,
 }
 
 impl AppState {
@@ -382,21 +455,47 @@ impl AppState {
             confirm_update: None,
             confirm_force_checkout: None,
             confirm_op: None,
-            copy_menu: None,
-            label_menu: None,
-            reviewer_menu: None,
+            screens: Vec::new(),
             repo_labels: Vec::new(),
             labels_loading: false,
-            merge_menu: None,
             merge_settings: None,
             merge_settings_loading: false,
             last_fetch: None,
             syncing: HashSet::new(),
             devin_sessions: Vec::new(),
             sessions_loading: false,
-            chat: None,
-            pr_view: None,
         }
+    }
+
+    /// 画面を一番上に開く
+    pub fn push(&mut self, screen: impl Into<Screen>) {
+        self.screens.push(screen.into());
+    }
+
+    /// 一番上の画面を閉じて, その下の画面に戻る
+    pub fn pop(&mut self) -> Option<Screen> {
+        self.screens.pop()
+    }
+
+    /// 一番上の画面. 一覧なら None
+    pub fn top(&self) -> Option<&Screen> {
+        self.screens.last()
+    }
+
+    /// 積みの中の PR #n の PR ビュー. スレッドから届いた結果を, 一番上でなくても, 下に隠れていても反映する
+    pub fn pr_view_for(&mut self, n: u64) -> Option<&mut PrView> {
+        self.screens.iter_mut().rev().find_map(|s| match s {
+            Screen::PrView(v) if v.number == n => Some(v),
+            _ => None,
+        })
+    }
+
+    /// 積みの中の session `id` の会話ビュー. `pr_view_for` と同じく下に隠れていても引く
+    pub fn chat_for(&mut self, id: &str) -> Option<&mut ChatView> {
+        self.screens.iter_mut().rev().find_map(|s| match s {
+            Screen::Chat(c) if c.session_id == id => Some(c),
+            _ => None,
+        })
     }
 
     pub fn list(&self) -> &PrList {
@@ -451,17 +550,20 @@ impl AppState {
 
     /// ラベルの選択画面に並べる選択肢. 開いていなければ空
     pub fn label_choices(&self) -> Vec<Label> {
-        self.label_menu
-            .as_ref()
+        self.label_menu()
             .map(|m| label_choices(&self.repo_labels, &m.before, &m.query))
             .unwrap_or_default()
     }
 
     /// review 依頼の選択画面に並べる選択肢. 開いていないか, PR が一覧から消えていれば空
     pub fn reviewer_choices(&self) -> Vec<ReviewerChoice> {
-        let Some(menu) = &self.reviewer_menu else {
-            return vec![];
-        };
+        self.reviewer_menu()
+            .map(|m| self.reviewer_choices_for(m))
+            .unwrap_or_default()
+    }
+
+    /// `menu` に並べる選択肢. 開く前に選択肢があるかを確かめるのにも使う
+    pub fn reviewer_choices_for(&self, menu: &ReviewerMenu) -> Vec<ReviewerChoice> {
         self.pr(menu.number)
             .map(|p| {
                 reviewer_choices(
@@ -476,7 +578,7 @@ impl AppState {
 
     /// 会話ビューで開いている session
     pub fn chat_session(&self) -> Option<&DevinSession> {
-        let id = &self.chat.as_ref()?.session_id;
+        let id = &self.chat()?.session_id;
         self.devin_sessions.iter().find(|s| &s.id == id)
     }
 

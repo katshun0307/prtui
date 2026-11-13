@@ -20,7 +20,7 @@ pub(super) fn open_chat(state: &mut AppState) -> Vec<Effect> {
         state.error(format!("#{n} に Devin session が無い"));
         return vec![];
     };
-    state.chat = Some(ChatView::new(id, n));
+    state.push(ChatView::new(id, n));
     vec![]
 }
 
@@ -29,7 +29,7 @@ const NO_DEVIN_CONFIG: &str = "Devin の設定が無い. git config prtui.devin-
 /// 会話ビューのキー. 1 行入力中は編集キー以外の文字を入力位置に挿す
 pub(super) fn chat_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
     let url = state.chat_session().map(|s| s.url.clone());
-    let Some(chat) = state.chat.as_mut() else {
+    let Some(chat) = state.chat_mut() else {
         return vec![];
     };
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -64,7 +64,9 @@ pub(super) fn chat_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
             chat.last_poll = None;
             chat.error = None;
         }
-        KeyCode::Esc | KeyCode::Char('q') if !chat.sending => state.chat = None,
+        KeyCode::Esc | KeyCode::Char('q') if !chat.sending => {
+            state.pop();
+        }
         _ => {}
     }
     vec![]
@@ -147,7 +149,7 @@ mod tests {
     fn view_without_config_is_error() {
         let mut s = state(vec![pr(1)]);
         assert!(handle_key(&mut s, key('v')).is_empty());
-        assert!(s.chat.is_none());
+        assert!(s.chat().is_none());
         assert!(message(&s).0.starts_with("Devin の設定が無い"));
         assert!(message(&s).1);
     }
@@ -157,7 +159,7 @@ mod tests {
     fn view_without_session_is_error() {
         let mut s = devin_state(vec![pr(1)]);
         assert!(handle_key(&mut s, key('v')).is_empty());
-        assert!(s.chat.is_none());
+        assert!(s.chat().is_none());
         assert_eq!(message(&s), ("#1 に Devin session が無い", true));
     }
 
@@ -204,7 +206,7 @@ mod tests {
     #[test]
     fn chat_r_polls_now() {
         let mut s = chat_state();
-        s.chat.as_mut().unwrap().last_poll = Some(Instant::now());
+        s.chat_mut().unwrap().last_poll = Some(Instant::now());
         handle_key(&mut s, key('r'));
         assert!(chat(&s).last_poll.is_none());
     }
@@ -220,7 +222,7 @@ mod tests {
         }
         handle_key(&mut s, code(KeyCode::Backspace));
         assert_eq!(chat(&s).draft, " q");
-        assert!(s.chat.is_some());
+        assert!(s.chat().is_some());
         assert_eq!(
             handle_key(&mut s, code(KeyCode::Enter)),
             vec![Effect::SendMessage {
@@ -289,16 +291,16 @@ mod tests {
         assert!(!chat(&s).typing);
         assert_eq!(chat(&s).draft, "a");
         assert!(handle_key(&mut s, code(KeyCode::Esc)).is_empty());
-        assert!(s.chat.is_none());
+        assert!(s.chat().is_none());
     }
 
     #[test]
     fn chat_close_ignored_while_sending() {
         let mut s = chat_state();
-        s.chat.as_mut().unwrap().sending = true;
+        s.chat_mut().unwrap().sending = true;
         handle_key(&mut s, key('q'));
         handle_key(&mut s, code(KeyCode::Esc));
-        assert!(s.chat.is_some());
+        assert!(s.chat().is_some());
         // e も送信中は無視する
         assert!(handle_key(&mut s, key('e')).is_empty());
         // Ctrl-C は常に終了
@@ -309,7 +311,7 @@ mod tests {
     #[test]
     fn chat_compose_and_open() {
         let mut s = chat_state();
-        s.chat.as_mut().unwrap().draft = "hi".into();
+        s.chat_mut().unwrap().draft = "hi".into();
         assert_eq!(
             handle_key(&mut s, key('e')),
             vec![Effect::Compose { draft: "hi".into() }]
@@ -326,7 +328,7 @@ mod tests {
     fn chat_scroll() {
         let mut s = chat_state();
         {
-            let c = s.chat.as_mut().unwrap();
+            let c = s.chat_mut().unwrap();
             c.max_scroll = 10;
             c.viewport_height = 6;
         }

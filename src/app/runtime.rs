@@ -685,7 +685,7 @@ mod tests {
         let mut view = crate::app::state::PrView::new(&pr(1));
         view.fetching = false;
         view.saving_body = true;
-        a.state.pr_view = Some(view);
+        a.state.push(view);
         a.perform(vec![Effect::EditBody {
             number: 1,
             original: "old".into(),
@@ -696,7 +696,7 @@ mod tests {
             f.gh.calls(),
             vec![r#"edit_body 1 "old" "new""#, "fetch_conversation 1"]
         );
-        let v = a.state.pr_view.as_ref().unwrap();
+        let v = a.state.pr_view().unwrap();
         assert!(!v.saving_body);
         assert_eq!(v.notice.as_deref(), Some("#1 の説明を更新した"));
     }
@@ -710,11 +710,11 @@ mod tests {
         ));
         let mut view = crate::app::state::PrView::new(&pr(1));
         view.diff.fetching = true;
-        a.state.pr_view = Some(view);
+        a.state.push(view);
         a.perform(vec![Effect::FetchDiff(1)]);
         a.pump_blocking(1);
         assert_eq!(f.gh.calls(), vec!["fetch_diff 1"]);
-        let v = a.state.pr_view.as_ref().unwrap();
+        let v = a.state.pr_view().unwrap();
         assert!(!v.diff.fetching);
         assert_eq!(v.diff.diff.as_ref().map(|d| d.totals()), Some((1, 1)));
     }
@@ -725,7 +725,7 @@ mod tests {
         let mut a = app(&f);
         let mut view = crate::app::state::PrView::new(&pr(1));
         view.resolving = true;
-        a.state.pr_view = Some(view);
+        a.state.push(view);
         a.perform(vec![Effect::ResolveThread {
             number: 1,
             id: "T1".into(),
@@ -733,7 +733,7 @@ mod tests {
         }]);
         a.pump_blocking(1);
         assert_eq!(f.gh.calls(), vec!["resolve_thread T1 true"]);
-        let v = a.state.pr_view.as_ref().unwrap();
+        let v = a.state.pr_view().unwrap();
         assert!(!v.resolving);
         assert_eq!(v.notice.as_deref(), Some("スレッドを解決した"));
     }

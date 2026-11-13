@@ -142,7 +142,7 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
                 Ok(settings) => state.merge_settings = Some(settings),
                 // 方法が分からなければ選べないので確認画面を閉じる. 次に開いたときに取り直す
                 Err(e) => {
-                    state.merge_menu = None;
+                    state.pop_merge_menu();
                     state.error(format!("マージ方法の取得失敗: {e}"));
                 }
             }
@@ -224,7 +224,7 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
         }
         Event::DevinMessages(id, res) => {
             // 閉じたか別の session に移った後に届いた結果は捨てる
-            let Some(chat) = state.chat.as_mut().filter(|c| c.session_id == id) else {
+            let Some(chat) = state.chat_for(&id) else {
                 return vec![];
             };
             chat.fetching = false;
@@ -239,7 +239,7 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
             vec![]
         }
         Event::DevinSent(id, res) => {
-            let Some(chat) = state.chat.as_mut().filter(|c| c.session_id == id) else {
+            let Some(chat) = state.chat_for(&id) else {
                 return vec![];
             };
             chat.sending = false;
@@ -263,7 +263,7 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
         }
         Event::FetchedConversation(n, res) => {
             // 閉じたか別の PR に移った後に届いた結果は捨てる
-            let Some(view) = state.pr_view.as_mut().filter(|v| v.number == n) else {
+            let Some(view) = state.pr_view_for(n) else {
                 return vec![];
             };
             view.fetching = false;
@@ -296,7 +296,7 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
                 (Err(e), true) => format!("スレッドの解決失敗: {e}"),
                 (Err(e), false) => format!("スレッドを未解決に戻すのに失敗: {e}"),
             };
-            match state.pr_view.as_mut().filter(|v| v.number == n) {
+            match state.pr_view_for(n) {
                 Some(view) => {
                     view.resolving = false;
                     match res {
@@ -316,7 +316,7 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
             effects
         }
         Event::FetchedDiff(n, res) => {
-            let Some(view) = state.pr_view.as_mut().filter(|v| v.number == n) else {
+            let Some(view) = state.pr_view_for(n) else {
                 return vec![];
             };
             view.diff.fetching = false;
@@ -344,7 +344,7 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
                 Ok(_) => format!("#{n} を{}", action.phrase()),
                 Err(e) => format!("#{n} のレビュー送信失敗: {e}"),
             };
-            match state.pr_view.as_mut().filter(|v| v.number == n) {
+            match state.pr_view_for(n) {
                 Some(view) => {
                     view.submitting = false;
                     match res {
@@ -366,7 +366,7 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
         }
         Event::EditedBody { number: n, res } => {
             let mut effects = vec![];
-            match state.pr_view.as_mut().filter(|v| v.number == n) {
+            match state.pr_view_for(n) {
                 Some(view) => {
                     view.saving_body = false;
                     match res {
@@ -403,7 +403,7 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
                 // 開いていれば選択画面に出し, 以前の一覧で続けられるようにする
                 Err(e) => {
                     let text = format!("ラベル一覧の取得失敗: {e}");
-                    match state.label_menu.as_mut() {
+                    match state.label_menu_mut() {
                         Some(m) => m.error = Some(text),
                         None => state.error(text),
                     }
@@ -469,7 +469,7 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
             }
         }
         Event::Composed(res) => {
-            if let Some(view) = state.pr_view.as_mut()
+            if let Some(view) = state.pr_view_mut()
                 && let Some(composing) = view.composing.take()
             {
                 return match (res, composing) {
@@ -493,7 +493,7 @@ pub fn handle_event(state: &mut AppState, ev: Event) -> Vec<Effect> {
                     }
                 };
             }
-            let Some(chat) = state.chat.as_mut() else {
+            let Some(chat) = state.chat_mut() else {
                 return vec![];
             };
             match res {
@@ -670,7 +670,7 @@ mod tests {
     #[test]
     fn messages_for_other_session_are_dropped() {
         let mut s = chat_state();
-        s.chat.as_mut().unwrap().fetching = true;
+        s.chat_mut().unwrap().fetching = true;
         let effects = handle_event(&mut s, Event::DevinMessages("devin-b".into(), Ok(vec![])));
         assert!(effects.is_empty());
         assert!(chat(&s).fetching);
@@ -680,7 +680,7 @@ mod tests {
     #[test]
     fn messages_err_goes_to_chat() {
         let mut s = chat_state();
-        s.chat.as_mut().unwrap().fetching = true;
+        s.chat_mut().unwrap().fetching = true;
         handle_event(
             &mut s,
             Event::DevinMessages("devin-a".into(), Err(anyhow!("boom"))),
@@ -696,7 +696,7 @@ mod tests {
     fn sent_ok_clears_draft_and_updates_session() {
         let mut s = chat_state();
         {
-            let c = s.chat.as_mut().unwrap();
+            let c = s.chat_mut().unwrap();
             c.set_draft("hi".into());
             c.typing = true;
             c.sending = true;
@@ -720,7 +720,7 @@ mod tests {
     fn sent_err_keeps_draft() {
         let mut s = chat_state();
         {
-            let c = s.chat.as_mut().unwrap();
+            let c = s.chat_mut().unwrap();
             c.draft = "hi".into();
             c.sending = true;
         }
@@ -744,7 +744,7 @@ mod tests {
     #[test]
     fn composed_sends_or_cancels() {
         let mut s = chat_state();
-        s.chat.as_mut().unwrap().draft = "old".into();
+        s.chat_mut().unwrap().draft = "old".into();
         assert!(handle_event(&mut s, Event::Composed(Ok(None))).is_empty());
         assert_eq!(chat(&s).draft, "old");
 
@@ -774,7 +774,7 @@ mod tests {
         assert_eq!(effects, vec![Effect::SaveCache]);
         assert!(!s.sessions_loading);
         // 開いている session が一覧から消えても会話ビューは残す
-        assert!(s.chat.is_some());
+        assert!(s.chat().is_some());
         assert!(s.chat_session().is_none());
 
         s.sessions_loading = true;

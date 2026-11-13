@@ -24,28 +24,31 @@ pub(super) fn open_reviewers(state: &mut AppState) -> Vec<Effect> {
         state.error(format!("#{n} は Draft なので review 依頼しない"));
         return vec![];
     }
-    state.reviewer_menu = Some(ReviewerMenu::new(n));
-    if state.reviewer_choices().is_empty() {
-        state.reviewer_menu = None;
+    let menu = ReviewerMenu::new(n);
+    if state.reviewer_choices_for(&menu).is_empty() {
         state.error(
             "review 依頼の相手が居ない. git config prtui.reviewers <login>,<login> か prtui.reviewer-set <名前>=<login>,<login> を設定する"
                 .into(),
         );
+        return vec![];
     }
+    state.push(menu);
     vec![]
 }
 
 pub(super) fn reviewer_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
     let len = state.reviewer_choices().len();
-    let Some(menu) = state.reviewer_menu.as_mut() else {
+    let Some(menu) = state.reviewer_menu_mut() else {
         return vec![];
     };
     match key.code {
-        KeyCode::Esc => state.reviewer_menu = None,
+        KeyCode::Esc => {
+            state.pop();
+        }
         KeyCode::Enter => return apply(state),
         KeyCode::Tab => {
             toggle_cursor(state);
-            if let Some(menu) = state.reviewer_menu.as_mut() {
+            if let Some(menu) = state.reviewer_menu_mut() {
                 advance(&mut menu.list, len);
             }
         }
@@ -59,7 +62,7 @@ pub(super) fn reviewer_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
 /// 選択肢の数が変わったとき (PR を取り直して依頼中の人が増えたなど) にカーソルを範囲に収める
 pub(super) fn clamp_cursor(state: &mut AppState) {
     let len = state.reviewer_choices().len();
-    if let Some(menu) = state.reviewer_menu.as_mut() {
+    if let Some(menu) = state.reviewer_menu_mut() {
         clamp(&mut menu.list, len);
     }
 }
@@ -68,16 +71,19 @@ pub(super) fn clamp_cursor(state: &mut AppState) {
 /// そうでなければ残りを足す. 依頼中の人しか居ない項目は何もしない
 fn toggle_cursor(state: &mut AppState) {
     let choices = state.reviewer_choices();
-    let Some(menu) = state.reviewer_menu.as_mut() else {
+    let Some(menu) = state.reviewer_menu() else {
         return;
     };
-    let Some(pr) = state.mine.prs.iter().find(|p| p.number == menu.number) else {
+    let Some(pr) = state.pr(menu.number) else {
         return;
     };
     let Some(choice) = menu.list.selected().and_then(|i| choices.get(i)) else {
         return;
     };
     let targets = choice.targets(pr);
+    let Some(menu) = state.reviewer_menu_mut() else {
+        return;
+    };
     let chosen = |l: &String| menu.chosen.iter().any(|c| same_login(c, l));
     if targets.iter().all(chosen) {
         menu.chosen
@@ -89,13 +95,13 @@ fn toggle_cursor(state: &mut AppState) {
 }
 
 fn apply(state: &mut AppState) -> Vec<Effect> {
-    let Some(menu) = state.reviewer_menu.as_ref() else {
+    let Some(menu) = state.reviewer_menu() else {
         return vec![];
     };
     if menu.chosen.is_empty() {
         toggle_cursor(state);
     }
-    let Some(menu) = state.reviewer_menu.as_ref() else {
+    let Some(menu) = state.reviewer_menu() else {
         return vec![];
     };
     let n = menu.number;
@@ -111,7 +117,7 @@ fn apply(state: &mut AppState) -> Vec<Effect> {
         // 依頼中の人の上や, 絞り込みで何も無いときは開いたままにする
         return vec![];
     }
-    state.reviewer_menu = None;
+    state.pop_reviewer_menu();
     state.busy = Some(format!(
         "#{n} に {} の review を依頼している…",
         targets.join(", ")
@@ -169,14 +175,14 @@ mod tests {
     }
 
     fn chosen(s: &AppState) -> Vec<String> {
-        s.reviewer_menu.as_ref().unwrap().chosen.clone()
+        s.reviewer_menu().unwrap().chosen.clone()
     }
 
     #[test]
     fn open_lists_sets_then_people() {
         let mut s = reviewing();
         assert!(handle_key(&mut s, key('R')).is_empty());
-        assert_eq!(s.reviewer_menu.as_ref().unwrap().number, 1);
+        assert_eq!(s.reviewer_menu().unwrap().number, 1);
         assert_eq!(labels(&s), ["@backend", "carol", "bob", "dave", "alice"]);
     }
 
@@ -201,7 +207,7 @@ mod tests {
                 targets: strings(&["carol"]),
             }]
         );
-        assert!(s.reviewer_menu.is_none());
+        assert!(s.reviewer_menu().is_none());
         assert_eq!(
             s.busy.as_deref(),
             Some("#1 に carol の review を依頼している…")
@@ -251,7 +257,7 @@ mod tests {
         handle_key(&mut s, code(KeyCode::Tab));
         assert!(chosen(&s).is_empty());
         assert!(handle_key(&mut s, code(KeyCode::Enter)).is_empty());
-        assert!(s.reviewer_menu.is_some());
+        assert!(s.reviewer_menu().is_some());
         assert!(s.busy.is_none());
     }
 
@@ -261,7 +267,7 @@ mod tests {
         handle_key(&mut s, key('R'));
         handle_key(&mut s, code(KeyCode::Tab));
         assert!(handle_key(&mut s, code(KeyCode::Esc)).is_empty());
-        assert!(s.reviewer_menu.is_none());
+        assert!(s.reviewer_menu().is_none());
         assert!(s.busy.is_none());
     }
 
@@ -271,7 +277,7 @@ mod tests {
         s.mine.prs[0].is_draft = true;
         assert!(handle_key(&mut s, key('R')).is_empty());
         assert_eq!(message(&s), ("#1 は Draft なので review 依頼しない", true));
-        assert!(s.reviewer_menu.is_none());
+        assert!(s.reviewer_menu().is_none());
     }
 
     #[test]
@@ -279,7 +285,7 @@ mod tests {
         let mut s = state(vec![pr(1)]);
         assert!(handle_key(&mut s, key('R')).is_empty());
         assert!(message(&s).1);
-        assert!(s.reviewer_menu.is_none());
+        assert!(s.reviewer_menu().is_none());
 
         // 設定が無くてもレビュー済みの人が居れば開く
         s.mine.prs[0].reviewers = vec![Reviewer {
@@ -297,7 +303,7 @@ mod tests {
         handle_key(&mut s, key('3'));
         assert!(handle_key(&mut s, key('R')).is_empty());
         assert_eq!(message(&s), ("R はマージ予定タブでは使えない", true));
-        assert!(s.reviewer_menu.is_none());
+        assert!(s.reviewer_menu().is_none());
     }
 
     #[test]
@@ -355,10 +361,10 @@ mod tests {
         let mut s = reviewing();
         handle_key(&mut s, key('R'));
         handle_key(&mut s, code(KeyCode::Up));
-        assert_eq!(s.reviewer_menu.as_ref().unwrap().list.selected(), Some(4));
+        assert_eq!(s.reviewer_menu().unwrap().list.selected(), Some(4));
         // PR が消えたら選択肢は空になる
         handle_event(&mut s, Event::Reloaded(1, Box::new(Ok(None))));
-        assert_eq!(s.reviewer_menu.as_ref().unwrap().list.selected(), Some(0));
+        assert_eq!(s.reviewer_menu().unwrap().list.selected(), Some(0));
         assert!(handle_key(&mut s, code(KeyCode::Enter)).is_empty());
     }
 }

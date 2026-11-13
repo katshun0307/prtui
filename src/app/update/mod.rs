@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::event::Effect;
-use super::state::AppState;
-use crate::domain::copy::{CopyItem, copy_items};
+use super::state::{AppState, Screen};
+use crate::domain::copy::copy_items;
 use crate::domain::devin::review_url;
 use crate::domain::linear::{issue_url, linear_issue_key};
 use crate::domain::op::PrOp;
@@ -57,7 +57,7 @@ pub fn refresh(state: &mut AppState) -> Vec<Effect> {
 /// 会話ビューのメッセージを `CHAT_POLL` ごとに, 全件を `AUTO_REFRESH` ごとに取り直す
 pub fn tick(state: &mut AppState, now: Instant) -> Vec<Effect> {
     let mut effects = vec![];
-    if let Some(chat) = state.chat.as_mut()
+    if let Some(chat) = state.chat_mut()
         && !chat.fetching
         && chat
             .last_poll
@@ -80,46 +80,41 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         return vec![Effect::Quit];
     }
-    if state.chat.is_some() {
-        return chat::chat_key(state, key);
-    }
-    if state.pr_view.is_some() {
-        return pr_view::pr_view_key(state, key);
-    }
-    // 前の操作の結果はキーを押したら消し, フッターをキー案内に戻す
-    state.message = None;
-    if let Some((n, base)) = state.confirm_update.take() {
-        if key.code == KeyCode::Char('y') {
-            return update_branch(state, n, base);
+    // 一覧のフッターの確認とメッセージは一覧に属する. 全画面の画面 (とその上のポップアップ) では触らない
+    if !state.screens.iter().any(Screen::is_full) {
+        // 前の操作の結果はキーを押したら消し, フッターをキー案内に戻す
+        state.message = None;
+        if let Some((n, base)) = state.confirm_update.take() {
+            if key.code == KeyCode::Char('y') {
+                return update_branch(state, n, base);
+            }
+            state.info(format!("{base} の取り込みを取りやめた"));
+            return vec![];
         }
-        state.info(format!("{base} の取り込みを取りやめた"));
-        return vec![];
-    }
-    if let Some((n, branch)) = state.confirm_force_checkout.take() {
-        if key.code == KeyCode::Char('y') {
-            return checkout(state, n, true);
+        if let Some((n, branch)) = state.confirm_force_checkout.take() {
+            if key.code == KeyCode::Char('y') {
+                return checkout(state, n, true);
+            }
+            state.info(format!("{branch} を PR に合わせるのを取りやめた"));
+            return vec![];
         }
-        state.info(format!("{branch} を PR に合わせるのを取りやめた"));
-        return vec![];
-    }
-    if let Some((n, op)) = state.confirm_op.take() {
-        if key.code == KeyCode::Char(op.key()) {
-            return change_state(state, n, op);
+        if let Some((n, op)) = state.confirm_op.take() {
+            if key.code == KeyCode::Char(op.key()) {
+                return change_state(state, n, op);
+            }
+            state.info(format!("#{n} の {} を取りやめた", op.label()));
+            return vec![];
         }
-        state.info(format!("#{n} の {} を取りやめた", op.label()));
-        return vec![];
     }
-    if let Some(items) = state.copy_menu.take() {
-        return copy(state, items, key);
-    }
-    if state.label_menu.is_some() {
-        return label::label_key(state, key);
-    }
-    if state.reviewer_menu.is_some() {
-        return reviewer::reviewer_key(state, key);
-    }
-    if state.merge_menu.is_some() {
-        return merge::merge_key(state, key);
+    // キーは一番上の画面に渡す. 何も開いていなければ一覧
+    match state.top() {
+        Some(Screen::Chat(_)) => return chat::chat_key(state, key),
+        Some(Screen::PrView(_)) => return pr_view::pr_view_key(state, key),
+        Some(Screen::Copy(_)) => return copy(state, key),
+        Some(Screen::Labels(_)) => return label::label_key(state, key),
+        Some(Screen::Reviewers(_)) => return reviewer::reviewer_key(state, key),
+        Some(Screen::Merge(_)) => return merge::merge_key(state, key),
+        None => {}
     }
     if state.tab.is_readonly()
         && let KeyCode::Char(c @ ('u' | 'O' | 'D' | 'X' | 'R' | 'a' | 'M')) = key.code
@@ -131,7 +126,8 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
         return vec![];
     }
     match key.code {
-        KeyCode::Char('q') | KeyCode::Esc => vec![Effect::Quit],
+        // Esc は画面を戻るキーなので, 戻りすぎて終わらないよう一覧では何もしない
+        KeyCode::Char('q') => vec![Effect::Quit],
         KeyCode::Tab => cycle_tab(state, 1),
         KeyCode::BackTab => cycle_tab(state, -1),
         KeyCode::Char(c @ '1'..='9') => {
@@ -177,9 +173,12 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
             None => vec![],
         },
         KeyCode::Char('c') => {
-            state.copy_menu = state
+            if let Some(items) = state
                 .selected()
-                .map(|p| copy_items(p, state.local.linear_workspace.as_deref()));
+                .map(|p| copy_items(p, state.local.linear_workspace.as_deref()))
+            {
+                state.push(items);
+            }
             vec![]
         }
         KeyCode::Char('o') => state
@@ -221,7 +220,10 @@ fn cycle_tab(state: &mut AppState, delta: isize) -> Vec<Effect> {
 }
 
 /// コピー選択画面のキー. 項目のキーならその値をコピーし, 他のキーは何もせず閉じる
-fn copy(state: &mut AppState, items: Vec<CopyItem>, key: KeyEvent) -> Vec<Effect> {
+fn copy(state: &mut AppState, key: KeyEvent) -> Vec<Effect> {
+    let Some(items) = state.pop_copy_menu() else {
+        return vec![];
+    };
     let KeyCode::Char(c) = key.code else {
         return vec![];
     };
@@ -408,12 +410,12 @@ mod test_util {
             "devin-a",
             "https://github.com/o/r/pull/1",
         )];
-        s.chat = Some(ChatView::new("devin-a".into(), 1));
+        s.push(ChatView::new("devin-a".into(), 1));
         s
     }
 
     pub(super) fn chat(s: &AppState) -> &ChatView {
-        s.chat.as_ref().expect("chat")
+        s.chat().expect("chat")
     }
 
     pub(super) fn code(c: KeyCode) -> KeyEvent {
@@ -424,6 +426,8 @@ mod test_util {
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
+
+    use crate::app::Screen;
 
     use pretty_assertions::assert_eq;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -533,11 +537,55 @@ mod tests {
     }
 
     #[test]
+    fn esc_goes_back_one_screen() {
+        let mut s = state(vec![pr(1)]);
+        let esc = || KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        handle_key(&mut s, key('p'));
+        handle_key(&mut s, key('d'));
+        // 別の画面の上に開いた画面は, 閉じると下の画面に戻る
+        s.push(crate::app::LabelMenu::new(1, vec![]));
+        handle_key(&mut s, esc());
+        assert!(matches!(s.top(), Some(Screen::PrView(_))));
+        // diff のページから説明とコメントのページ, 一覧の順に戻る
+        handle_key(&mut s, esc());
+        assert_eq!(s.pr_view().unwrap().page, crate::app::PrPage::Conversation);
+        handle_key(&mut s, esc());
+        assert!(s.screens.is_empty());
+        assert!(handle_key(&mut s, esc()).is_empty());
+    }
+
+    #[test]
+    fn popup_over_full_screen_leaves_list_confirm() {
+        let mut s = state(vec![pr(1)]);
+        handle_key(&mut s, key('p'));
+        s.confirm_op = Some((1, PrOp::Draft));
+        s.push(crate::app::LabelMenu::new(1, vec![]));
+        // 一覧の確認は一覧に戻るまで残し, キーは一番上のポップアップが受け取る
+        assert!(handle_key(&mut s, key('D')).is_empty());
+        assert_eq!(s.confirm_op, Some((1, PrOp::Draft)));
+        assert_eq!(s.label_menu().unwrap().query, "D");
+    }
+
+    #[test]
+    fn pop_by_kind_only_closes_top() {
+        let mut s = state(vec![pr(1)]);
+        handle_key(&mut s, key('p'));
+        s.push(crate::app::LabelMenu::new(1, vec![]));
+        // 下にある PR ビューは抜かない. 上のラベル選択画面が浮くため
+        assert!(s.pop_pr_view().is_none());
+        assert_eq!(s.screens.len(), 2);
+        assert!(s.pop_label_menu().is_some());
+        assert!(s.pop_pr_view().is_some());
+        assert!(s.screens.is_empty());
+    }
+
+    #[test]
     fn quit_keys() {
         let mut s = state(vec![]);
         assert_eq!(handle_key(&mut s, key('q')), vec![Effect::Quit]);
+        // Esc は戻るキーなので一覧では終わらない
         let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
-        assert_eq!(handle_key(&mut s, esc), vec![Effect::Quit]);
+        assert!(handle_key(&mut s, esc).is_empty());
         let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(handle_key(&mut s, ctrl_c), vec![Effect::Quit]);
     }
@@ -600,8 +648,8 @@ mod tests {
                 (&*format!("{c} はレビュータブでは使えない"), true)
             );
             assert!(s.confirm_op.is_none() && s.confirm_update.is_none());
-            assert!(s.label_menu.is_none() && s.reviewer_menu.is_none());
-            assert!(s.merge_menu.is_none());
+            assert!(s.label_menu().is_none() && s.reviewer_menu().is_none());
+            assert!(s.merge_menu().is_none());
         }
     }
 
@@ -610,12 +658,12 @@ mod tests {
         let mut s = review_state(vec![pr(1)], vec![pr(10)]);
         handle_key(&mut s, key('2'));
         assert!(handle_key(&mut s, key('c')).is_empty());
-        assert!(s.copy_menu.is_some());
+        assert!(s.copy_menu().is_some());
         assert_eq!(
             handle_key(&mut s, key('b')),
             vec![Effect::Copy("b10".into())]
         );
-        assert!(s.copy_menu.is_none());
+        assert!(s.copy_menu().is_none());
         handle_key(&mut s, key('c'));
         assert_eq!(
             handle_key(&mut s, key('n')),
@@ -632,7 +680,7 @@ mod tests {
             message(&s),
             ("Linear issue キー をコピーできない: issue キーが無い", true)
         );
-        assert!(s.copy_menu.is_none());
+        assert!(s.copy_menu().is_none());
     }
 
     #[test]
@@ -640,7 +688,7 @@ mod tests {
         let mut s = state(vec![pr(1), pr(2)]);
         handle_key(&mut s, key('c'));
         assert!(handle_key(&mut s, key('j')).is_empty());
-        assert!(s.copy_menu.is_none());
+        assert!(s.copy_menu().is_none());
         // 閉じるだけで移動はしない
         assert_eq!(s.mine.table.selected(), Some(0));
         assert!(s.message.is_none());

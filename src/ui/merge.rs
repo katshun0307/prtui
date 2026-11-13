@@ -11,7 +11,7 @@ use crate::domain::merge::merge_warnings;
 /// 一覧の上に出すマージの確認画面. PR のタイトルとブランチ, 注意点 (yellow), 方法のキーを並べる.
 /// 既定の方法 (Enter) は bold にして `(Enter)` を付ける
 pub(super) fn draw_merge_menu(f: &mut Frame, state: &AppState, area: Rect) {
-    let Some(menu) = &state.merge_menu else {
+    let Some(menu) = state.merge_menu() else {
         return;
     };
     let Some(pr) = state.pr(menu.number) else {

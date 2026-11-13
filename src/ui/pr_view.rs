@@ -12,7 +12,7 @@ use crate::domain::diff::{Diff, DiffLine, FileDiff, FileStatus, LineKind, Row};
 
 /// PR ビュー (説明とコメントか diff) を全画面に描く. scroll の上限と欄の高さを `PrView` に書く
 pub(super) fn draw_pr_view(f: &mut Frame, state: &mut AppState) {
-    let Some(view) = state.pr_view.as_mut() else {
+    let Some(view) = state.pr_view_mut() else {
         return;
     };
     let [header, body, footer] = Layout::vertical([
